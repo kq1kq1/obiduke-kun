@@ -10,10 +10,16 @@ UPLOAD_FOLDER = 'uploads'
 PROCESSED_FOLDER = 'processed'
 ALLOWED_PDF_EXTENSIONS = {'pdf'}
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg'}
+ALLOWED_BANNER_TYPES = {'competitor', 'custom'}
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['PROCESSED_FOLDER'] = PROCESSED_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
+
+os.makedirs('uploads/pdfs', exist_ok=True)
+os.makedirs('uploads/banners/competitor', exist_ok=True)
+os.makedirs('uploads/banners/custom', exist_ok=True)
+os.makedirs('processed', exist_ok=True)
 
 def allowed_file(filename, allowed_extensions):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_extensions
@@ -63,6 +69,10 @@ def banners():
 def upload_banner():
     banner_type = request.form.get('banner_type', 'custom')
     
+    if banner_type not in ALLOWED_BANNER_TYPES:
+        flash('Invalid banner type')
+        return redirect(url_for('banners'))
+    
     if 'banner_file' not in request.files:
         flash('No file selected')
         return redirect(url_for('banners'))
@@ -84,7 +94,7 @@ def upload_banner():
 
 @app.route('/delete_banner/<banner_type>/<filename>', methods=['POST'])
 def delete_banner(banner_type, filename):
-    if banner_type not in ['competitor', 'custom']:
+    if banner_type not in ALLOWED_BANNER_TYPES:
         flash('Invalid banner type')
         return redirect(url_for('banners'))
     
@@ -98,9 +108,4 @@ def delete_banner(banner_type, filename):
     return redirect(url_for('banners'))
 
 if __name__ == '__main__':
-    os.makedirs('uploads/pdfs', exist_ok=True)
-    os.makedirs('uploads/banners/competitor', exist_ok=True)
-    os.makedirs('uploads/banners/custom', exist_ok=True)
-    os.makedirs('processed', exist_ok=True)
-    
     app.run(host='0.0.0.0', port=5000, debug=True)
