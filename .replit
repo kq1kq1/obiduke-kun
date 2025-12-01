@@ -1,4 +1,2 @@
-run = "python3 app.py"
-
-[ports]
-ports = [{ port = 5000, visibility = "public" }]
+[agent]
+expertMode = true
