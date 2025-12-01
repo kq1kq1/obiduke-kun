@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Banner Processor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>PDF Banner Processor</h1>
+        
+        <nav>
+            <a href="{{ url_for('index') }}" class="active">Process PDF</a>
+            <a href="{{ url_for('banners') }}">Manage Banners</a>
+        </nav>
+        
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <div class="messages">
+                    {% for message in messages %}
+                        <p class="message">{{ message }}</p>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+        
+        <div class="upload-section">
+            <h2>Upload PDF for Processing</h2>
+            <p>Upload a PDF file to remove competitor banners and add your custom banner.</p>
+            
+            <form action="{{ url_for('upload_pdf') }}" method="post" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label for="pdf_file">Select PDF File:</label>
+                    <input type="file" name="pdf_file" id="pdf_file" accept=".pdf" required>
+                </div>
+                <button type="submit">Process PDF</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
