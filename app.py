@@ -4,7 +4,16 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional, List
 
-from flask import Flask, render_template, request, send_file, redirect, url_for, flash
+from flask import (
+    Flask,
+    render_template,
+    request,
+    send_file,
+    send_from_directory,
+    redirect,
+    url_for,
+    flash,
+)
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -247,6 +256,71 @@ def handle_pdf():
 def bands():
     files = os.listdir(DIR_TEMPLATES)
     return render_template("bands.html", templates=files)
+
+
+@app.route("/band_templates/<path:filename>")
+def band_template_file(filename):
+    """band_templates フォルダ内の画像をブラウザに配信する"""
+    return send_from_directory(DIR_TEMPLATES, filename)
+
+
+@app.route("/bands/delete", methods=["POST"])
+def delete_band():
+    """テンプレ画像を削除"""
+    filename = request.form.get("filename")
+    if not filename:
+        flash("ファイル名が指定されていません")
+        return redirect(url_for("bands"))
+
+    safe_name = os.path.basename(filename)
+    path = os.path.join(DIR_TEMPLATES, safe_name)
+
+    if os.path.isfile(path):
+        os.remove(path)
+        flash(f"「{safe_name}」を削除しました")
+    else:
+        flash("ファイルが見つかりませんでした")
+
+    return redirect(url_for("bands"))
+
+
+@app.route("/bands/rename", methods=["POST"])
+def rename_band():
+    """テンプレ画像の名前変更"""
+    old_name = request.form.get("old_name")
+    new_name = request.form.get("new_name")
+
+    if not old_name or not new_name:
+        flash("名前が正しく指定されていません")
+        return redirect(url_for("bands"))
+
+    old_name = os.path.basename(old_name)
+    new_name = os.path.basename(new_name)
+
+    # 拡張子は元のまま保持する（.png など）
+    old_root, old_ext = os.path.splitext(old_name)
+    new_root, new_ext = os.path.splitext(new_name)
+
+    if new_ext == "":
+        new_name_final = new_root + old_ext
+    else:
+        new_name_final = new_root + new_ext
+
+    old_path = os.path.join(DIR_TEMPLATES, old_name)
+    new_path = os.path.join(DIR_TEMPLATES, new_name_final)
+
+    if not os.path.isfile(old_path):
+        flash("元ファイルが見つかりませんでした")
+        return redirect(url_for("bands"))
+
+    if os.path.exists(new_path) and new_path != old_path:
+        flash("同じ名前のファイルが既に存在します")
+        return redirect(url_for("bands"))
+
+    os.rename(old_path, new_path)
+    flash(f"「{old_name}」を「{new_name_final}」に変更しました")
+
+    return redirect(url_for("bands"))
 
 
 @app.route("/bands/upload", methods=["POST"])

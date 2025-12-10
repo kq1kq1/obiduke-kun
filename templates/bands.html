@@ -4,6 +4,29 @@
   <meta charset="UTF-8">
   <title>帯テンプレ管理</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <style>
+    .band-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .band-table th,
+    .band-table td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      vertical-align: middle;
+    }
+    .band-preview {
+      max-width: 260px;
+      max-height: 80px;
+    }
+    .band-actions form {
+      display: inline-block;
+      margin-right: 8px;
+    }
+    .name-input {
+      width: 180px;
+    }
+  </style>
 </head>
 <body>
 
@@ -13,19 +36,6 @@
 
 <section>
   <h2>登録されているテンプレ</h2>
-  {% if templates %}
-    <ul>
-      {% for t in templates %}
-        <li>{{ t }}</li>
-      {% endfor %}
-    </ul>
-  {% else %}
-    <p>テンプレ無し</p>
-  {% endif %}
-</section>
-
-<section>
-  <h2>新規テンプレアップロード</h2>
 
   {% with messages = get_flashed_messages() %}
     {% if messages %}
@@ -37,9 +47,63 @@
     {% endif %}
   {% endwith %}
 
-  <form action="/bands/upload" method="post" enctype="multipart/form-data">
+  {% if templates %}
+    <table class="band-table">
+      <thead>
+        <tr>
+          <th>プレビュー</th>
+          <th>ファイル名</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in templates %}
+          <tr>
+            <td>
+              <img
+                src="{{ url_for('band_template_file', filename=t) }}"
+                alt="{{ t }}"
+                class="band-preview"
+              >
+            </td>
+            <td>{{ t }}</td>
+            <td class="band-actions">
+              <!-- 名前変更フォーム -->
+              <form action="{{ url_for('rename_band') }}" method="post">
+                <input type="hidden" name="old_name" value="{{ t }}">
+                <input
+                  type="text"
+                  name="new_name"
+                  value="{{ t }}"
+                  class="name-input"
+                >
+                <button type="submit">名前変更</button>
+              </form>
+
+              <!-- 削除フォーム -->
+              <form
+                action="{{ url_for('delete_band') }}"
+                method="post"
+                onsubmit="return confirm('本当に削除しますか？');"
+              >
+                <input type="hidden" name="filename" value="{{ t }}">
+                <button type="submit">削除</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>テンプレ無し</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>新規テンプレアップロード</h2>
+
+  <form action="{{ url_for('upload_band') }}" method="post" enctype="multipart/form-data">
     <input type="file" name="band_file" accept="image/*" required>
-    <br><br>
     <button type="submit">アップロード</button>
   </form>
 </section>
