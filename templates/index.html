@@ -6,12 +6,10 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-
 <h1>帯削除 ＋ 自社帯付け 自動処理</h1>
 
   <section>
     <h2>PDF をアップロードして処理</h2>
-
     {% with messages = get_flashed_messages() %}
       {% if messages %}
         <ul class="flash">
@@ -21,27 +19,42 @@
         </ul>
       {% endif %}
     {% endwith %}
-
     <form action="/process" method="post" enctype="multipart/form-data">
       <input type="file" name="pdf_file" accept="application/pdf" required>
       <br><br>
       <button type="submit">処理開始</button>
     </form>
   </section>
-  
-<section>
-  <h2>登録済み 他社帯テンプレ一覧</h2>
-  {% if templates %}
-    <ul>
+
+  <section>
+    <h2>登録済み 他社帯テンプレ</h2>
+    {% if templates %}
+      {# 会社名でグループ化 #}
+      {% set companies = [] %}
       {% for t in templates %}
-        <li>{{ t }}</li>
+        {% set company = t.split('_')[0] if '_' in t else '未分類' %}
+        {% if company not in companies %}
+          {% set _ = companies.append(company) %}
+        {% endif %}
       {% endfor %}
-    </ul>
-  {% else %}
-    <p>まだテンプレが登録されていません。</p>
-  {% endif %}
-  <p><a href="/bands">▶ テンプレ管理ページへ</a></p>
-</section>
+      <ul>
+        {% for company in companies %}
+          {% set count = templates | selectattr('__class__') | list %}
+          {% set cnt = [] %}
+          {% for t in templates %}
+            {% if (t.split('_')[0] if '_' in t else '未分類') == company %}
+              {% set _ = cnt.append(t) %}
+            {% endif %}
+          {% endfor %}
+          <li>{{ company }}（{{ cnt|length }}件）</li>
+        {% endfor %}
+      </ul>
+      <p style="font-size:13px;color:#666;">合計 {{ templates|length }} 件登録済み</p>
+    {% else %}
+      <p>まだテンプレが登録されていません。</p>
+    {% endif %}
+    <p><a href="/bands">▶ テンプレ管理ページへ</a></p>
+  </section>
 
 </body>
 </html>

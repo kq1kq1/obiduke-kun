@@ -9,22 +9,17 @@
     h1 { margin-bottom: 4px; }
     .back-link { margin-bottom: 20px; display: inline-block; }
 
-    /* アップロードセクション */
     .upload-section { background: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
     .upload-section h2 { margin-top: 0; font-size: 16px; }
-    .upload-section h3 { font-size: 14px; margin: 12px 0 6px; }
 
-    /* フラッシュ */
     .flash { list-style: none; padding: 0; }
     .flash li { background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; }
 
-    /* 一括削除バー */
     .bulk-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 10px 14px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; }
     .bulk-bar button { background: #b00020; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; }
     .bulk-bar button:disabled { background: #ccc; cursor: default; }
     #selected-count { font-size: 14px; color: #555; }
 
-    /* 会社グループ */
     .company-group { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
     .company-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #f0f0f0; cursor: pointer; user-select: none; }
     .company-header:hover { background: #e8e8e8; }
@@ -33,7 +28,6 @@
     .toggle-icon { font-size: 12px; color: #888; transition: transform 0.2s; }
     .company-header.open .toggle-icon { transform: rotate(180deg); }
 
-    /* テンプレ一覧 */
     .template-list { display: none; padding: 12px; }
     .template-list.open { display: block; }
 
@@ -46,9 +40,6 @@
     .name-input { width: 160px; font-size: 13px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; }
     .btn-rename { background: #555; color: #fff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; }
     .btn-delete { background: #b00020; color: #fff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; }
-
-    /* 未分類グループ */
-    .company-header.uncategorized { background: #fafafa; }
   </style>
 </head>
 <body>
@@ -65,16 +56,8 @@
   {% endif %}
 {% endwith %}
 
-<!-- アップロードセクション -->
 <div class="upload-section">
-  <h2>テンプレを追加</h2>
-  <h3>📁 画像から追加</h3>
-  <form action="{{ url_for('upload_band') }}" method="post" enctype="multipart/form-data">
-    <input type="file" name="band_file" accept="image/*" required>
-    <button type="submit">アップロード</button>
-  </form>
-  <hr>
-  <h3>📄 PDFから帯テンプレ作成</h3>
+  <h2>📄 PDFから帯テンプレ作成</h2>
   <form action="{{ url_for('extract_band_from_pdf') }}" method="post" enctype="multipart/form-data">
     <p style="font-size:13px;color:#555;margin:4px 0 8px;">PDFから帯を切り取ってテンプレ登録します。</p>
     <input type="file" name="pdf_file" accept="application/pdf" required>
@@ -82,11 +65,9 @@
   </form>
 </div>
 
-<!-- 登録テンプレ一覧 -->
 <h2>登録テンプレ（{{ templates|length }}件）</h2>
 
 {% if templates %}
-  <!-- 一括削除フォーム -->
   <form id="bulk-delete-form" action="{{ url_for('delete_band_bulk') }}" method="post" onsubmit="return confirmBulkDelete();">
     <div class="bulk-bar">
       <span id="selected-count">0件選択中</span>
@@ -96,11 +77,9 @@
       </label>
     </div>
 
-    {# ファイル名からグループ化: アンダースコア区切りの最初のパートを会社名とみなす #}
     {% set groups = {} %}
     {% for t in templates %}
-      {% set parts = t.split('_') %}
-      {% set company = parts[0] if parts|length > 1 else '未分類' %}
+      {% set company = t.split('_')[0] if '_' in t else '未分類' %}
       {% if company not in groups %}
         {% set _ = groups.update({company: []}) %}
       {% endif %}
@@ -143,20 +122,16 @@
 {% endif %}
 
 <script>
-  // グループ折りたたみ
   function toggleGroup(header) {
     header.classList.toggle('open');
-    const list = header.nextElementSibling;
-    list.classList.toggle('open');
+    header.nextElementSibling.classList.toggle('open');
   }
 
-  // 最初は全グループを開いた状態にする
   document.querySelectorAll('.company-header').forEach(h => {
     h.classList.add('open');
     h.nextElementSibling.classList.add('open');
   });
 
-  // チェックボックス管理
   function updateCount() {
     const checked = document.querySelectorAll('input[name=filenames]:checked').length;
     document.getElementById('selected-count').textContent = checked + '件選択中';
