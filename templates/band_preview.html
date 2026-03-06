@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>帯テンプレ プレビュー調整</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <style>
+    .preview-container {
+      position: relative;
+      display: inline-block;
+      max-width: 100%;
+      border: 1px solid #ccc;
+    }
+    .preview-image {
+      display: block;
+      max-width: 100%;
+    }
+    .band-overlay {
+      position: absolute;
+      left: 0;
+      right: 0;
+      background: rgba(255, 0, 0, 0.25);
+      pointer-events: none;
+    }
+    .controls {
+      margin-top: 1rem;
+    }
+    .controls label {
+      display: block;
+      margin: 0.4rem 0;
+    }
+    .template-name-input {
+      width: 260px;
+    }
+  </style>
+</head>
+<body>
+
+<h1>帯テンプレ プレビュー調整</h1>
+
+<p><a href="{{ url_for('bands') }}">◀ テンプレ管理ページに戻る</a></p>
+
+<div class="preview-container" id="previewContainer">
+  <img
+    src="{{ url_for('uploaded_file', filename=preview_image) }}"
+    id="previewImage"
+    class="preview-image"
+    alt="PDF プレビュー"
+  >
+  <div id="bandOverlay" class="band-overlay"></div>
+</div>
+
+<div class="controls">
+  <form action="{{ url_for('save_cropped_band') }}" method="post">
+    <input type="hidden" name="pdf_id" value="{{ pdf_id }}">
+    <input type="hidden" name="pdf_filename" value="{{ pdf_filename }}">
+    <input type="hidden" name="preview_image" value="{{ preview_image }}">
+    <input type="hidden" name="page_index" value="{{ page_index }}">
+
+    <!-- JS で更新される -->
+    <input type="hidden" name="y0_ratio" id="y0RatioInput" value="{{ '%.4f' % y0_ratio }}">
+    <input type="hidden" name="y1_ratio" id="y1RatioInput" value="{{ '%.4f' % y1_ratio }}">
+
+    <label>
+      上側（ページ全体に対する位置）:
+      <input type="range" id="topSlider" min="0" max="100" step="0.5"
+             value="{{ '%.1f' % (y0_ratio * 100) }}">
+      <span id="topValue"></span> %
+    </label>
+
+    <label>
+      下側（ページ全体に対する位置）:
+      <input type="range" id="bottomSlider" min="0" max="100" step="0.5"
+             value="{{ '%.1f' % (y1_ratio * 100) }}">
+      <span id="bottomValue"></span> %
+    </label>
+
+    <label>
+      テンプレート名:
+      <input
+        type="text"
+        name="template_name"
+        class="template-name-input"
+        value="new_band_template"
+        required
+      >
+    </label>
+
+    <p>
+      上下のスライダーを動かして赤い帯の範囲を調整し、
+      「テンプレとして保存」を押してください。
+    </p>
+
+    <button type="submit">この範囲でテンプレとして保存</button>
+  </form>
+</div>
+
+<script>
+  const img = document.getElementById('previewImage');
+  const overlay = document.getElementById('bandOverlay');
+  const topSlider = document.getElementById('topSlider');
+  const bottomSlider = document.getElementById('bottomSlider');
+  const topValue = document.getElementById('topValue');
+  const bottomValue = document.getElementById('bottomValue');
+  const y0Input = document.getElementById('y0RatioInput');
+  const y1Input = document.getElementById('y1RatioInput');
+
+  function updateOverlay() {
+    const rect = img.getBoundingClientRect();
+    const height = rect.height;
+
+    const topPercent = parseFloat(topSlider.value);
+    const bottomPercent = parseFloat(bottomSlider.value);
+
+    // 下側が上側より上に行かないようにする
+    if (bottomPercent <= topPercent + 1) {
+      bottomSlider.value = topPercent + 1;
+    }
+
+    const topPx = height * (topSlider.value / 100.0);
+    const bottomPx = height * (bottomSlider.value / 100.0);
+
+    overlay.style.top = topPx + 'px';
+    overlay.style.height = (bottomPx - topPx) + 'px';
+
+    topValue.textContent = topSlider.value;
+    bottomValue.textContent = bottomSlider.value;
+
+    // サーバーに送る値（0〜1 の割合）
+    y0Input.value = (topSlider.value / 100.0).toFixed(4);
+    y1Input.value = (bottomSlider.value / 100.0).toFixed(4);
+  }
+
+  img.addEventListener('load', updateOverlay);
+  topSlider.addEventListener('input', updateOverlay);
+  bottomSlider.addEventListener('input', updateOverlay);
+
+  // 初期描画
+  updateOverlay();
+</script>
+
+</body>
+</html>

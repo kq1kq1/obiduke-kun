@@ -47,6 +47,28 @@
     {% endif %}
   {% endwith %}
 
+  <section>
+    <h2>新規テンプレアップロード</h2>
+
+    <!-- 画像ファイルから直接テンプレ登録 -->
+    <h3>画像から追加</h3>
+    <form action="{{ url_for('upload_band') }}" method="post" enctype="multipart/form-data">
+      <input type="file" name="band_file" accept="image/*" required>
+      <button type="submit">画像をアップロード</button>
+    </form>
+
+    <hr>
+
+    <!-- ★ここが今回のフォーム：PDF から帯を切り出してテンプレ登録 -->
+    <h3>PDFから帯テンプレ作成</h3>
+    <form action="{{ url_for('extract_band_from_pdf') }}" method="post" enctype="multipart/form-data">
+      <p>PDF から帯を自分で切り取ってテンプレ登録します。</p>
+      <input type="file" name="pdf_file" accept="application/pdf" required>
+      <button type="submit">PDFから帯テンプレ作成</button>
+    </form>
+  </section>
+
+  
   {% if templates %}
     <table class="band-table">
       <thead>
@@ -97,15 +119,6 @@
   {% else %}
     <p>テンプレ無し</p>
   {% endif %}
-</section>
-
-<section>
-  <h2>新規テンプレアップロード</h2>
-
-  <form action="{{ url_for('upload_band') }}" method="post" enctype="multipart/form-data">
-    <input type="file" name="band_file" accept="image/*" required>
-    <button type="submit">アップロード</button>
-  </form>
 </section>
 
 </body>

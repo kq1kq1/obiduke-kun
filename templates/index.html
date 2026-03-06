@@ -9,8 +9,28 @@
 
 <h1>帯削除 ＋ 自社帯付け 自動処理</h1>
 
+  <section>
+    <h2>PDF をアップロードして処理</h2>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <ul class="flash">
+          {% for msg in messages %}
+            <li>{{ msg }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <form action="/process" method="post" enctype="multipart/form-data">
+      <input type="file" name="pdf_file" accept="application/pdf" required>
+      <br><br>
+      <button type="submit">処理開始</button>
+    </form>
+  </section>
+  
 <section>
-  <h2>1. 登録済み 他社帯テンプレ一覧</h2>
+  <h2>登録済み 他社帯テンプレ一覧</h2>
   {% if templates %}
     <ul>
       {% for t in templates %}
@@ -21,26 +41,6 @@
     <p>まだテンプレが登録されていません。</p>
   {% endif %}
   <p><a href="/bands">▶ テンプレ管理ページへ</a></p>
-</section>
-
-<section>
-  <h2>2. PDF をアップロードして処理</h2>
-
-  {% with messages = get_flashed_messages() %}
-    {% if messages %}
-      <ul class="flash">
-        {% for msg in messages %}
-          <li>{{ msg }}</li>
-        {% endfor %}
-      </ul>
-    {% endif %}
-  {% endwith %}
-
-  <form action="/process" method="post" enctype="multipart/form-data">
-    <input type="file" name="pdf_file" accept="application/pdf" required>
-    <br><br>
-    <button type="submit">処理開始</button>
-  </form>
 </section>
 
 </body>
