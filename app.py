@@ -3,6 +3,7 @@ import os
 import uuid
 from dataclasses import dataclass
 from typing import Optional, List
+from threading import Thread, Lock
 
 from flask import (
     Flask,
@@ -13,23 +14,13 @@ from flask import (
     redirect,
     url_for,
     flash,
+    jsonify,
 )
 
 import numpy as np
 from PIL import Image, ImageDraw
 import fitz  # PyMuPDF
 from skimage.metrics import structural_similarity as ssim
-
-import threading
-
-progress_lock = threading.Lock()
-progress = {
-    "status": "idle",  # idle/running/done/error
-    "current": 0,
-    "total": 0,
-    "job_id": None,
-    "error": None,
-}
 
 # ============================================
 # 設定
@@ -44,9 +35,8 @@ class DetectionConfig:
     portrait_center_ratio: float = 0.5
     portrait_half_height_ratio: float = 0.1
 
-    # ↓ここを少しゆるめる
-    ssim_threshold: float = 0.65  # 元: 0.60
-    mse_threshold: float = 0.06  # 元: 0.06
+    ssim_threshold: float = 0.65
+    mse_threshold: float = 0.06
 
     step_ratio: float = 0.03
     duplicate_ssim_threshold: float = 0.98
@@ -119,7 +109,6 @@ class TemplateDB:
         self.items: List[BandTemplate] = []
 
     def load(self):
-        # 毎回リセットしてから読み込む
         self.items.clear()
 
         files = [
@@ -143,22 +132,12 @@ db = TemplateDB()
 
 
 def detect_band(gray, page_index=None):
-    """
-    gray: 0〜1 のグレースケール画像 (numpy 2D)
-
-    戻り値:
-      - 横型(landscape): [(orient, x0, y0, x1, y1)] または []
-      - 縦型(portrait): 下＋中央の最大2件を返す（両方ヒットなら2件）
-    """
     h, w = gray.shape
     orient = "landscape" if w >= h else "portrait"
 
     if DEBUG_DETECT:
         print(f"[page-info] page={page_index} orient={orient} size=({w}x{h})")
 
-    # -----------------------------
-    # 帯の「高さ」の候補: 5%〜18% を 1% 間隔
-    # -----------------------------
     height_min = 0.05
     height_max = 0.18
     step_height = 0.01
@@ -169,29 +148,20 @@ def detect_band(gray, page_index=None):
         height_ratios.append(r)
         r += step_height
 
-    # ★ 速度：テンプレのリサイズをキャッシュ
     resized_cache: dict[tuple[int, int, int], np.ndarray] = {}
-    # ★ 速度：SSIM前のMSE足切り（効かせたいなら倍率を下げる）
     mse_prefilter = float(getattr(config, "mse_threshold", 0.15)) * 1.2
 
     region_w_global = w
-    best_any = None  # デバッグ用（ページ内で一番良かった値）
+    best_any = None
 
     def build_candidate_windows(
             mode: str,
             offset_step_landscape: float = 0.02,
             bottom_step_portrait: float = 0.01,
             center_step_portrait: float = 0.01) -> list[tuple[int, int]]:
-        """
-        mode:
-          - "all" : portraitは下＋中央両方
-          - "bottom" : portraitは下のみ
-          - "center" : portraitは中央のみ
-        """
         candidate_windows: list[tuple[int, int]] = []
 
         if orient == "landscape":
-            # 横向き: 下部 0〜20%
             for hr in height_ratios:
                 win_h = int(h * hr)
                 if win_h < 8:
@@ -206,13 +176,11 @@ def detect_band(gray, page_index=None):
                     offset += offset_step_landscape
 
         else:
-            # 縦向き
             for hr in height_ratios:
                 win_h = int(h * hr)
                 if win_h < 8:
                     continue
 
-                # A: 下部 0〜10%
                 if mode in ("all", "bottom"):
                     offset = 0.0
                     while offset <= 0.10 + 1e-6:
@@ -223,7 +191,6 @@ def detect_band(gray, page_index=None):
                         candidate_windows.append((y0, y1))
                         offset += bottom_step_portrait
 
-                # B: 上から 40〜55%（centerをずらす）
                 if mode in ("all", "center"):
                     center_ratio = 0.40
                     while center_ratio <= 0.55 + 1e-6:
@@ -237,10 +204,6 @@ def detect_band(gray, page_index=None):
         return sorted(set(candidate_windows))
 
     def scan(candidate_windows: list[tuple[int, int]]):
-        """
-        その候補群の中で「最初に閾値を満たしたもの」を返す（速度優先）
-        戻り: (ssim, mse, orient, gx0, gy0, gx1, gy1) or None
-        """
         nonlocal best_any
 
         for (y0, y1) in candidate_windows:
@@ -255,7 +218,6 @@ def detect_band(gray, page_index=None):
                 if t_h <= 0 or t_w <= 0:
                     continue
 
-                # 横幅に合わせてリサイズ
                 target_w = region_w
                 scale = target_w / float(t_w)
                 target_h = int(t_h * scale)
@@ -269,31 +231,25 @@ def detect_band(gray, page_index=None):
                     resized = resize_gray(tmpl.gray, target_h, target_w)
                     resized_cache[key] = resized
 
-                # 中央寄せ
                 v_offset = (region_h - target_h) // 2
                 y0_patch = v_offset
                 y1_patch = v_offset + target_h
                 patch = region[y0_patch:y1_patch, :]
 
-                # 先行MSE足切り
                 m1 = mse(patch, resized)
                 if m1 > mse_prefilter:
                     continue
 
-                # SSIM
                 s1 = ssim(patch, resized, data_range=1.0)
 
-                # 絶対座標
                 gx0 = 0
                 gx1 = region_w_global
                 gy0 = y0 + y0_patch
                 gy1 = y0 + y1_patch
 
-                # デバッグ用ベスト
                 if (best_any is None) or (s1 > best_any[0]):
                     best_any = (s1, m1, orient, gx0, gy0, gx1, gy1)
 
-                # 本判定
                 if (s1 >= config.ssim_threshold
                         and m1 <= config.mse_threshold):
                     return (s1, m1, orient, gx0, gy0, gx1, gy1)
@@ -303,7 +259,6 @@ def detect_band(gray, page_index=None):
     results: list[tuple[str, int, int, int, int]] = []
 
     if orient == "portrait":
-        # まず下を探す
         bottom_windows = build_candidate_windows("bottom",
                                                  bottom_step_portrait=0.01,
                                                  center_step_portrait=0.01)
@@ -312,19 +267,16 @@ def detect_band(gray, page_index=None):
             _, m_hit, o, x0, y0, x1, y1 = hit_bottom
             results.append((o, x0, y0, x1, y1))
 
-            # 下でヒットしたら、必ず中央も探す（そしてヒットしたら両方採用）
             center_windows = build_candidate_windows("center",
                                                      bottom_step_portrait=0.01,
                                                      center_step_portrait=0.01)
             hit_center = scan(center_windows)
             if hit_center is not None:
                 _, m_hit2, o2, x02, y02, x12, y12 = hit_center
-                # 同一領域を二重適用しないための簡易ガード（ほぼ同じならスキップ）
                 if not (abs(y02 - y0) < 5 and abs(y12 - y1) < 5):
                     results.append((o2, x02, y02, x12, y12))
 
         else:
-            # 下がダメなら中央だけは探す
             center_windows = build_candidate_windows("center",
                                                      bottom_step_portrait=0.01,
                                                      center_step_portrait=0.01)
@@ -334,14 +286,12 @@ def detect_band(gray, page_index=None):
                 results.append((o2, x02, y02, x12, y12))
 
     else:
-        # 横型は従来通り（1回ヒットでOK）
         windows = build_candidate_windows("all", offset_step_landscape=0.02)
         hit = scan(windows)
         if hit is not None:
             _, _, o, x0, y0, x1, y1 = hit
             results.append((o, x0, y0, x1, y1))
 
-    # ログ
     if DEBUG_DETECT and best_any is not None:
         s_best, m_best, _, bx0, by0, bx1, by1 = best_any
         print(f"[detect-best] page={page_index} "
@@ -366,10 +316,8 @@ def detect_band(gray, page_index=None):
 
 
 def apply_band(page_img, det):
-    # det = (orient, x0, y0, x1, y1)
     orient, x0, y0, x1, y1 = det
 
-    # 念のためページ内にクランプ
     page = page_img.convert("RGBA")
     W, H = page.size
 
@@ -379,23 +327,19 @@ def apply_band(page_img, det):
     y1 = max(0, min(int(y1), H))
 
     if x1 <= x0 or y1 <= y0:
-        # 変な座標だったら、そのまま返す
         return page_img
 
     band_w = x1 - x0
     band_h = y1 - y0
 
-    # ① 検出した帯領域を白塗り
     draw = ImageDraw.Draw(page)
     draw.rectangle([(x0, y0), (x1, y1)], fill=(255, 255, 255, 255))
 
-    # ② 自社帯画像を、その領域と同じサイズにリサイズして貼る
     band = Image.open(OWN_BAND).convert("RGBA")
     band = band.resize((band_w, band_h), Image.LANCZOS)
 
     page.paste(band, (x0, y0), band)
 
-    # 返り値は元と同じRGBにしておく
     return page.convert("RGB")
 
 
@@ -405,7 +349,6 @@ def apply_band(page_img, det):
 
 
 def process_pdf(input_path, output_path):
-    # テンプレ読み込み
     db.load()
     doc = fitz.open(input_path)
     pages_out = []
@@ -417,21 +360,16 @@ def process_pdf(input_path, output_path):
         progress["out_path"] = output_path
 
     for i, page in enumerate(doc):
-        # ===== ページを縮小して描画（どんなに大きくても最大2200px） =====
-        max_px = 2200  # 好きなら 1800〜2500 の間で調整してOK
-        rect = page.rect  # 元ページの物理サイズ
-        # 幅・高さのどちらかが max_px になるような倍率
+        max_px = 2200
+        rect = page.rect
         scale = min(max_px / rect.width, max_px / rect.height)
 
         pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-        # ==========================================================
 
-        # 検出用グレースケール
         g = img.convert("L")
         g_arr = np.asarray(g, dtype=np.float32) / 255.0
 
-        # 帯検出（page_index=i+1 を渡す）
         dets = detect_band(g_arr, page_index=i + 1)
 
         for det in dets:
@@ -442,7 +380,6 @@ def process_pdf(input_path, output_path):
 
         pages_out.append(img)
 
-    # PDFとして保存
     first, *rest = pages_out
     first.save(output_path, save_all=True, append_images=rest)
 
@@ -451,18 +388,8 @@ def process_pdf(input_path, output_path):
 # Flask
 # ============================================
 
-progress = {
-    "status": "idle",
-    "current": 0,
-    "total": 0,
-    "error": None,
-    "out_path": None
-}
-
 app = Flask(__name__)
 app.secret_key = "secretkey"
-
-from threading import Thread, Lock
 
 progress_lock = Lock()
 progress = {
@@ -487,13 +414,6 @@ def render_page_to_pil(doc,
 
 
 def auto_extract_band_from_page(page_img: Image.Image):
-    """
-    PDFページ画像から「帯らしき横長の領域」の
-    初期候補を 1つ返す（人間があとで調整する前提）
-
-    戻り値: (y0_ratio, y1_ratio)  0.0〜1.0  （ページ全体に対する高さの割合）
-            見つからなければ None
-    """
     g = page_img.convert("L")
     g_arr = np.asarray(g, dtype=np.float32) / 255.0
     h, w = g_arr.shape
@@ -530,18 +450,12 @@ def auto_extract_band_from_page(page_img: Image.Image):
     if not candidate:
         return None
 
-    # とりあえず一番下側の候補を採用（帯は下のほうにあることが多い）
     y0, y1 = sorted(candidate, key=lambda r: r[1])[-1]
-
     return (y0 / h, y1 / h)
 
 
 @app.route("/bands/extract_from_pdf", methods=["POST"])
 def extract_band_from_pdf():
-    """
-    PDF をアップロード → 指定ページのプレビューを出し、
-    高さを調整してテンプレ登録するための画面に遷移
-    """
     if "pdf_file" not in request.files:
         flash("PDFファイルがありません")
         return redirect(url_for("bands"))
@@ -560,18 +474,15 @@ def extract_band_from_pdf():
     pdf_path = os.path.join(DIR_UPLOAD, pdf_filename)
     pdf_file.save(pdf_path)
 
-    # とりあえず 1 ページ目だけを対象（必要ならページ番号も選べるように拡張）
     try:
         doc = fitz.open(pdf_path)
         page_index = 0
         img = render_page_to_pil(doc, page_index, max_px=2200)
 
-        # プレビュー画像を PNG として保存
         preview_name = f"preview_{pdf_id}.png"
         preview_path = os.path.join(DIR_UPLOAD, preview_name)
         img.save(preview_path)
 
-        # 帯候補の初期位置を推定（なければ 0.7〜0.9 くらいをデフォにする）
         init = auto_extract_band_from_page(img)
         if init is None:
             y0_ratio, y1_ratio = 0.7, 0.9
@@ -583,12 +494,11 @@ def extract_band_from_pdf():
         flash("PDFの解析中にエラーが発生しました: " + str(e))
         return redirect(url_for("bands"))
 
-    # プレビュー画面を表示
     return render_template(
         "band_preview.html",
         pdf_id=pdf_id,
         pdf_filename=pdf_filename,
-        preview_image=preview_name,  # uploads 内のファイル名
+        preview_image=preview_name,
         page_index=page_index,
         y0_ratio=y0_ratio,
         y1_ratio=y1_ratio,
@@ -602,10 +512,6 @@ def uploaded_file(filename):
 
 @app.route("/bands/save_cropped", methods=["POST"])
 def save_cropped_band():
-    """
-    プレビュー画面から送られてきた上下割合で帯をクロップし、
-    band_templates にテンプレとして保存する
-    """
     pdf_id = request.form.get("pdf_id")
     pdf_filename = request.form.get("pdf_filename")
     preview_name = request.form.get("preview_image")
@@ -633,7 +539,6 @@ def save_cropped_band():
 
         band_img = img.crop((0, y0, w, y1))
 
-        # 幅をそろえる（1200px くらい）
         target_width = 1200
         if w != target_width:
             new_h = int((y1 - y0) * (target_width / w))
@@ -650,7 +555,6 @@ def save_cropped_band():
         print("[save_cropped_band] error:", e)
         flash("テンプレ保存中にエラーが発生しました: " + str(e))
 
-    # 後片付け（一時ファイル削除）
     try:
         if os.path.exists(pdf_path):
             os.remove(pdf_path)
@@ -669,9 +573,6 @@ def index():
     return render_template("index.html", templates=files)
 
 
-from threading import Thread
-
-
 @app.route("/process", methods=["POST"])
 def handle_pdf():
     if "pdf_file" not in request.files:
@@ -683,15 +584,13 @@ def handle_pdf():
         flash("PDFをアップしてください")
         return redirect(url_for("index"))
 
-    # 前回ファイル削除
     clear_old_files()
 
-    job_id = str(uuid.uuid4())  # ★ pdf_id じゃなく job_id に統一（分かりやすくする）
+    job_id = str(uuid.uuid4())
     in_path = os.path.join(DIR_UPLOAD, job_id + ".pdf")
     out_path = os.path.join(DIR_OUTPUT, job_id + "_out.pdf")
     pdf.save(in_path)
 
-    # ★ progress 初期化（downloadもここで入れておく）
     with progress_lock:
         progress["status"] = "running"
         progress["current"] = 0
@@ -702,7 +601,6 @@ def handle_pdf():
 
     def worker():
         try:
-            # ★ ここは既存ロジックそのまま（中でprogress更新するなら尚良い）
             process_pdf(in_path, out_path)
 
             with progress_lock:
@@ -716,13 +614,11 @@ def handle_pdf():
 
     Thread(target=worker, daemon=True).start()
 
-    # ★ processing.html に job_id を渡す（進捗とDLを紐づけ）
     return render_template("processing.html", job_id=job_id)
 
 
 @app.route("/bands")
 def bands():
-    # band_templates フォルダ内のファイル一覧をテンプレに渡す
     files = [
         f for f in os.listdir(DIR_TEMPLATES)
         if f.lower().endswith((".png", ".jpg", ".jpeg"))
@@ -732,7 +628,6 @@ def bands():
 
 @app.route("/band_templates/<path:filename>")
 def band_template_file(filename):
-    """band_templates フォルダ内の画像をブラウザに配信する"""
     return send_from_directory(DIR_TEMPLATES, filename)
 
 
@@ -756,7 +651,6 @@ def upload_band():
 
 @app.route("/bands/delete", methods=["POST"])
 def delete_band():
-    """テンプレ画像を削除"""
     filename = request.form.get("filename")
     if not filename:
         flash("ファイル名が指定されていません")
@@ -776,7 +670,6 @@ def delete_band():
 
 @app.route("/bands/rename", methods=["POST"])
 def rename_band():
-    """テンプレ画像の名前変更"""
     old_name = request.form.get("old_name")
     new_name = request.form.get("new_name")
 
@@ -787,7 +680,6 @@ def rename_band():
     old_name = os.path.basename(old_name)
     new_name = os.path.basename(new_name)
 
-    # 拡張子は元ファイルを優先
     old_root, old_ext = os.path.splitext(old_name)
     new_root, new_ext = os.path.splitext(new_name)
 
@@ -811,9 +703,6 @@ def rename_band():
     flash(f"「{old_name}」を「{new_name_final}」に変更しました")
 
     return redirect(url_for("bands"))
-
-
-from flask import jsonify
 
 
 @app.route("/progress")
