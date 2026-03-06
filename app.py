@@ -668,6 +668,35 @@ def delete_band():
     return redirect(url_for("bands"))
 
 
+@app.route("/bands/delete_bulk", methods=["POST"])
+def delete_band_bulk():
+    filenames = request.form.getlist("filenames")
+    if not filenames:
+        flash("削除するファイルが選択されていません")
+        return redirect(url_for("bands"))
+
+    deleted = []
+    errors = []
+    for filename in filenames:
+        safe_name = os.path.basename(filename)
+        path = os.path.join(DIR_TEMPLATES, safe_name)
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+                deleted.append(safe_name)
+            except Exception as e:
+                errors.append(f"{safe_name}: {e}")
+        else:
+            errors.append(f"{safe_name}: 見つかりませんでした")
+
+    if deleted:
+        flash(f"{len(deleted)}件を削除しました")
+    for e in errors:
+        flash(f"エラー: {e}")
+
+    return redirect(url_for("bands"))
+
+
 @app.route("/bands/rename", methods=["POST"])
 def rename_band():
     old_name = request.form.get("old_name")

@@ -32,5 +32,9 @@ outputType = "webview"
 localPort = 5000
 externalPort = 80
 
+[[ports]]
+localPort = 5904
+externalPort = 3000
+
 [nix]
 packages = ["freetype", "glibcLocales", "lcms2", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "openjpeg", "poppler_utils", "tcl", "tk", "zlib"]

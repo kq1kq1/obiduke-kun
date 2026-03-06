@@ -12,4 +12,5 @@ dependencies = [
     "scikit-image>=0.22.0",
     "werkzeug>=3.1.4",
     "PyMuPDF>=1.24.10",
+    "fitz>=0.0.1.dev2",
 ]
