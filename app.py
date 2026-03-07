@@ -1,6 +1,7 @@
 print("=== Flask server started! ===")
 import os
 import uuid
+import json
 from dataclasses import dataclass
 from typing import Optional, List
 from threading import Thread, Lock
@@ -28,7 +29,6 @@ from skimage.metrics import structural_similarity as ssim
 
 DEBUG_DETECT = True
 
-# ガウシアンぼかしの半径（ラスタライズのズレを吸収する）
 BLUR_RADIUS = 3
 
 
@@ -40,9 +40,7 @@ class DetectionConfig:
 
     ssim_threshold: float = 0.65
     mse_threshold: float = 0.06
-
-    # ぼかし後は均一化されてMSEが小さくなるため、プリフィルタは緩めに設定
-    mse_prefilter_multiplier: float = 3.0
+    mse_prefilter_multiplier: float = 1.7  # 0.06 * 1.7 = 0.102
 
     step_ratio: float = 0.03
     duplicate_ssim_threshold: float = 0.98
@@ -55,6 +53,7 @@ DIR_OWN_BANDS = os.path.join(BASE, "own_bands")
 DIR_UPLOAD = os.path.join(BASE, "uploads")
 DIR_OUTPUT = os.path.join(BASE, "outputs")
 OWN_BAND_DEFAULT = os.path.join(BASE, "band_default.png")
+HIT_COUNT_FILE = os.path.join(BASE, "hit_counts.json")
 
 
 def get_own_band_path(band_name=None):
@@ -83,7 +82,6 @@ def list_own_bands():
 
 
 def clear_old_files():
-    """前回のアップロードPDFと出力PDFを削除する"""
     for d in (DIR_UPLOAD, DIR_OUTPUT):
         if not os.path.isdir(d):
             continue
@@ -110,27 +108,80 @@ os.makedirs(DIR_OUTPUT, exist_ok=True)
 config = DetectionConfig()
 
 # ============================================
+# ヒット頻度管理
+# ============================================
+
+hit_count_lock = Lock()
+
+
+def load_hit_counts() -> dict:
+    if os.path.isfile(HIT_COUNT_FILE):
+        try:
+            with open(HIT_COUNT_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_hit_counts(counts: dict):
+    try:
+        with open(HIT_COUNT_FILE, "w") as f:
+            json.dump(counts, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[warn] hit_counts保存失敗: {e}")
+
+
+def increment_hit_count(tmpl_name: str):
+    with hit_count_lock:
+        counts = load_hit_counts()
+        counts[tmpl_name] = counts.get(tmpl_name, 0) + 1
+        save_hit_counts(counts)
+
+
+# ============================================
 # ユーティリティ関数
 # ============================================
 
 
-def load_gray_blurred(path):
-    """テンプレ画像をグレースケール＋ぼかしで読み込む"""
+def load_gray_raw(path):
+    """グレースケールrawで読み込む（ぼかしなし）"""
     img = Image.open(path).convert("L")
-    img = img.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
+    return np.asarray(img, dtype=np.float32) / 255.0
+
+
+def load_color_raw(path):
+    """カラーrawで読み込む（ぼかしなし）"""
+    img = Image.open(path).convert("RGB")
     return np.asarray(img, dtype=np.float32) / 255.0
 
 
 def to_gray_blurred(pil_img):
-    """PIL画像をグレースケール＋ぼかしに変換"""
     img = pil_img.convert("L")
     img = img.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
     return np.asarray(img, dtype=np.float32) / 255.0
 
 
+def to_color_blurred(pil_img):
+    """PILカラー画像をぼかしに変換"""
+    img = pil_img.convert("RGB")
+    img = img.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
+    return np.asarray(img, dtype=np.float32) / 255.0
+
+
 def resize_gray(arr, h, w):
+    """グレー画像をリサイズしてぼかす（resize→blur順）"""
     img = Image.fromarray((arr * 255).astype(np.uint8))
     img = img.resize((w, h), Image.LANCZOS)
+    img = img.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))  # ★ リサイズ後にぼかす
+    return np.asarray(img, dtype=np.float32) / 255.0
+
+
+def resize_color(arr, h, w):
+    """カラー画像をリサイズしてぼかす（resize→blur順）"""
+    img = Image.fromarray((arr * 255).astype(np.uint8))
+    img = img.resize((w, h), Image.LANCZOS)
+    img = img.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))  # ★ リサイズ後にぼかす
     return np.asarray(img, dtype=np.float32) / 255.0
 
 
@@ -145,10 +196,12 @@ def mse(a, b):
 
 class BandTemplate:
 
-    def __init__(self, name, arr):
+    def __init__(self, name, gray, color=None):
         self.name = name
-        self.gray = arr  # ぼかし済みグレースケール
-        self.h, self.w = arr.shape
+        self.gray = gray  # グレースケールraw（ぼかしなし）
+        self.color = color  # カラーraw（ぼかしなし、_colorテンプレのみ）
+        self.is_color = color is not None
+        self.h, self.w = gray.shape
 
 
 class TemplateDB:
@@ -163,13 +216,26 @@ class TemplateDB:
             f for f in os.listdir(DIR_TEMPLATES)
             if f.lower().endswith((".png", ".jpg", ".jpeg"))
         ]
+
+        # ヒット頻度順にソート（多い順）
+        counts = load_hit_counts()
+        files.sort(key=lambda f: counts.get(f, 0), reverse=True)
+
         for f in files:
             path = os.path.join(DIR_TEMPLATES, f)
-            arr = load_gray_blurred(path)  # ぼかし済みで読み込み
-            self.items.append(BandTemplate(f, arr))
+            gray = load_gray_raw(path)  # ★ ぼかしなしrawで読み込む
+            # ファイル名に_colorが含まれる場合はカラーも読み込む
+            if "_color" in os.path.splitext(f)[0]:
+                color = load_color_raw(path)  # ★ ぼかしなしrawで読み込む
+            else:
+                color = None
+            self.items.append(BandTemplate(f, gray, color))
 
         if DEBUG_DETECT:
             print(f"[debug] loaded templates: {len(self.items)}")
+            color_count = sum(1 for t in self.items if t.is_color)
+            if color_count:
+                print(f"[debug] color templates: {color_count}")
 
 
 db = TemplateDB()
@@ -179,8 +245,8 @@ db = TemplateDB()
 # ============================================
 
 
-def detect_band(gray_blurred, page_index=None):
-    """ぼかし済みグレースケール画像から帯を検出する"""
+def detect_band(gray_blurred, color_blurred=None, page_index=None):
+    """グレースケール＋ぼかし画像から帯を検出する"""
     h, w = gray_blurred.shape
     orient = "landscape" if w >= h else "portrait"
 
@@ -197,9 +263,9 @@ def detect_band(gray_blurred, page_index=None):
         height_ratios.append(r)
         r += step_height
 
-    resized_cache: dict[tuple[int, int, int], np.ndarray] = {}
+    resized_cache: dict[tuple, np.ndarray] = {}
     mse_prefilter = float(getattr(config, "mse_threshold", 0.06)) * float(
-        getattr(config, "mse_prefilter_multiplier", 3.0))
+        getattr(config, "mse_prefilter_multiplier", 1.7))
 
     region_w_global = w
     best_any = None
@@ -207,7 +273,7 @@ def detect_band(gray_blurred, page_index=None):
     def build_candidate_windows(
             mode: str,
             offset_step_landscape: float = 0.02,
-            bottom_step_portrait: float = 0.01,
+            bottom_step_portrait: float = 0.02,
             center_step_portrait: float = 0.01) -> list[tuple[int, int]]:
         candidate_windows: list[tuple[int, int]] = []
 
@@ -253,101 +319,128 @@ def detect_band(gray_blurred, page_index=None):
 
         return sorted(set(candidate_windows))
 
-    def scan(candidate_windows: list[tuple[int, int]]):
-        nonlocal best_any
+    def get_patch_and_resized(tmpl, y0, y1, use_color=False):
+        """ウィンドウからパッチとリサイズ済みテンプレを取得"""
+        source = color_blurred if use_color else gray_blurred
+        if source is None:
+            return None, None
 
-        for (y0, y1) in candidate_windows:
-            region = gray_blurred[y0:y1, :]
-            if region.size == 0:
-                continue
+        region = source[y0:y1, :]
+        if region.size == 0:
+            return None, None
 
+        if use_color:
+            region_h, region_w, _ = region.shape
+        else:
             region_h, region_w = region.shape
 
+        t_h, t_w = tmpl.h, tmpl.w
+        if t_h <= 0 or t_w <= 0:
+            return None, None
+
+        target_w = region_w
+        scale = target_w / float(t_w)
+        target_h = int(t_h * scale)
+
+        if target_h <= 0 or target_h > region_h:
+            return None, None
+
+        key = (id(tmpl), target_h, target_w, use_color)
+        resized = resized_cache.get(key)
+        if resized is None:
+            if use_color:
+                resized = resize_color(tmpl.color, target_h, target_w)
+            else:
+                resized = resize_gray(tmpl.gray, target_h, target_w)
+            resized_cache[key] = resized
+
+        v_offset = (region_h - target_h) // 2
+        patch = region[v_offset:v_offset + target_h, :]
+
+        return patch, resized
+
+    def scan(candidate_windows: list[tuple[int, int]]):
+        nonlocal best_any
+        mse_pass_count = 0
+
+        for (y0, y1) in candidate_windows:
             for tmpl in db.items:
-                t_h, t_w = tmpl.h, tmpl.w
-                if t_h <= 0 or t_w <= 0:
+                use_color = tmpl.is_color and color_blurred is not None
+
+                patch, resized = get_patch_and_resized(tmpl, y0, y1, use_color)
+                if patch is None:
                     continue
-
-                target_w = region_w
-                scale = target_w / float(t_w)
-                target_h = int(t_h * scale)
-
-                if target_h <= 0 or target_h > region_h:
-                    continue
-
-                key = (id(tmpl), target_h, target_w)
-                resized = resized_cache.get(key)
-                if resized is None:
-                    resized = resize_gray(tmpl.gray, target_h, target_w)
-                    resized_cache[key] = resized
-
-                v_offset = (region_h - target_h) // 2
-                y0_patch = v_offset
-                y1_patch = v_offset + target_h
-                patch = region[y0_patch:y1_patch, :]
 
                 m1 = mse(patch, resized)
-                if m1 > mse_prefilter:
+                prefilter = mse_prefilter * 3.0 if use_color else mse_prefilter
+                if m1 > prefilter:
                     continue
 
-                s1 = ssim(patch, resized, data_range=1.0)
+                mse_pass_count += 1
 
-                gx0 = 0
-                gx1 = region_w_global
-                gy0 = y0 + y0_patch
-                gy1 = y0 + y1_patch
+                if use_color:
+                    s1 = ssim(patch, resized, data_range=1.0, channel_axis=2)
+                else:
+                    s1 = ssim(patch, resized, data_range=1.0)
+
+                region_h = y1 - y0
+                t_h = tmpl.h
+                target_w = gray_blurred.shape[1]
+                scale = target_w / float(tmpl.w)
+                target_h = int(t_h * scale)
+                v_offset = (region_h - target_h) // 2
+                gy0 = y0 + v_offset
+                gy1 = gy0 + target_h
 
                 if (best_any is None) or (s1 > best_any[0]):
-                    best_any = (s1, m1, orient, gx0, gy0, gx1, gy1)
+                    best_any = (s1, m1, orient, 0, gy0, region_w_global, gy1)
 
-                if (s1 >= config.ssim_threshold
-                        and m1 <= config.mse_threshold):
-                    return (s1, m1, orient, gx0, gy0, gx1, gy1, tmpl)
+                if s1 >= config.ssim_threshold and m1 <= config.mse_threshold:
+                    if DEBUG_DETECT:
+                        print(
+                            f"[scan] page={page_index} mse_pass={mse_pass_count} HIT ssim={s1:.3f} tmpl={tmpl.name}"
+                        )
+                    return (s1, m1, orient, 0, gy0, region_w_global, gy1, tmpl)
 
-                # 非常に高いスコアなら即終了
+                if tmpl.is_color:
+                    print(f"[color-ssim] win=({y0},{y1}) s1={s1:.3f}")
+
                 if s1 >= 0.92:
-                    return (s1, m1, orient, gx0, gy0, gx1, gy1, tmpl)
+                    if DEBUG_DETECT:
+                        print(
+                            f"[scan] page={page_index} mse_pass={mse_pass_count} HIT ssim={s1:.3f} tmpl={tmpl.name}"
+                        )
+                    return (s1, m1, orient, 0, gy0, region_w_global, gy1, tmpl)
 
+        if DEBUG_DETECT:
+            print(f"[scan] page={page_index} mse_pass={mse_pass_count} no_hit")
         return None
 
     def scan_single_tmpl(candidate_windows: list[tuple[int, int]], tmpl):
-        """ヒット済みのテンプレ1件だけでスキャンする（center用）"""
+        use_color = tmpl.is_color and color_blurred is not None
+
         for (y0, y1) in candidate_windows:
-            region = gray_blurred[y0:y1, :]
-            if region.size == 0:
+            patch, resized = get_patch_and_resized(tmpl, y0, y1, use_color)
+            if patch is None:
                 continue
-
-            region_h, region_w = region.shape
-            t_h, t_w = tmpl.h, tmpl.w
-            if t_h <= 0 or t_w <= 0:
-                continue
-
-            target_w = region_w
-            scale = target_w / float(t_w)
-            target_h = int(t_h * scale)
-
-            if target_h <= 0 or target_h > region_h:
-                continue
-
-            key = (id(tmpl), target_h, target_w)
-            resized = resized_cache.get(key)
-            if resized is None:
-                resized = resize_gray(tmpl.gray, target_h, target_w)
-                resized_cache[key] = resized
-
-            v_offset = (region_h - target_h) // 2
-            y0_patch = v_offset
-            y1_patch = v_offset + target_h
-            patch = region[y0_patch:y1_patch, :]
 
             m1 = mse(patch, resized)
-            if m1 > mse_prefilter:
+            prefilter = mse_prefilter * 3.0 if use_color else mse_prefilter
+            if m1 > prefilter:
                 continue
 
-            s1 = ssim(patch, resized, data_range=1.0)
+            if use_color:
+                s1 = ssim(patch, resized, data_range=1.0, channel_axis=2)
+            else:
+                s1 = ssim(patch, resized, data_range=1.0)
 
-            gy0 = y0 + y0_patch
-            gy1 = y0 + y1_patch
+            region_h = y1 - y0
+            target_w = gray_blurred.shape[1]
+            scale = target_w / float(tmpl.w)
+            target_h = int(tmpl.h * scale)
+            v_offset = (region_h - target_h) // 2
+            gy0 = y0 + v_offset
+            gy1 = gy0 + target_h
 
             if s1 >= config.ssim_threshold and m1 <= config.mse_threshold:
                 return (s1, m1, orient, 0, gy0, region_w_global, gy1, tmpl)
@@ -357,18 +450,14 @@ def detect_band(gray_blurred, page_index=None):
     results: list[tuple[str, int, int, int, int]] = []
 
     if orient == "portrait":
-        bottom_windows = build_candidate_windows("bottom",
-                                                 bottom_step_portrait=0.01,
-                                                 center_step_portrait=0.01)
+        bottom_windows = build_candidate_windows("bottom")
         hit_bottom = scan(bottom_windows)
         if hit_bottom is not None:
             _, m_hit, o, x0, y0, x1, y1, hit_tmpl = hit_bottom
             results.append((o, x0, y0, x1, y1))
+            increment_hit_count(hit_tmpl.name)
 
-            # bottomでヒットしたテンプレだけでcenterをスキャン
-            center_windows = build_candidate_windows("center",
-                                                     bottom_step_portrait=0.01,
-                                                     center_step_portrait=0.01)
+            center_windows = build_candidate_windows("center")
             hit_center = scan_single_tmpl(center_windows, hit_tmpl)
             if hit_center is not None:
                 _, m_hit2, o2, x02, y02, x12, y12, _ = hit_center
@@ -376,21 +465,24 @@ def detect_band(gray_blurred, page_index=None):
                     results.append((o2, x02, y02, x12, y12))
 
         else:
-            # bottomでヒットなし → 全テンプレでcenterをスキャン
-            center_windows = build_candidate_windows("center",
-                                                     bottom_step_portrait=0.01,
-                                                     center_step_portrait=0.01)
+            center_windows = build_candidate_windows("center")
+            if DEBUG_DETECT:
+                print(
+                    f"[center-scan] page={page_index} windows={len(center_windows)} mse_prefilter={mse_prefilter:.4f}"
+                )
             hit_center = scan(center_windows)
             if hit_center is not None:
-                _, m_hit2, o2, x02, y02, x12, y12, _ = hit_center
+                _, m_hit2, o2, x02, y02, x12, y12, hit_tmpl2 = hit_center
                 results.append((o2, x02, y02, x12, y12))
+                increment_hit_count(hit_tmpl2.name)
 
     else:
-        windows = build_candidate_windows("all", offset_step_landscape=0.02)
+        windows = build_candidate_windows("all")
         hit = scan(windows)
         if hit is not None:
-            _, _, o, x0, y0, x1, y1, _ = hit
+            _, _, o, x0, y0, x1, y1, hit_tmpl = hit
             results.append((o, x0, y0, x1, y1))
+            increment_hit_count(hit_tmpl.name)
 
     if DEBUG_DETECT and best_any is not None:
         s_best, m_best, _, bx0, by0, bx1, by1 = best_any
@@ -449,7 +541,6 @@ def apply_band(page_img, det, own_band_path):
 
 
 def process_pdf_single(input_path, own_band_path, page_offset=0):
-    """1つのPDFを処理してページ画像リストと未検出ページリストを返す"""
     doc = fitz.open(input_path)
     pages_out = []
     missed = []
@@ -462,9 +553,9 @@ def process_pdf_single(input_path, own_band_path, page_offset=0):
         pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
-        # グレースケール＋ぼかしで検出
         g_blurred = to_gray_blurred(img)
-        dets = detect_band(g_blurred, page_index=i + 1)
+        c_blurred = to_color_blurred(img)
+        dets = detect_band(g_blurred, c_blurred, page_index=i + 1)
 
         if dets:
             for det in dets:
@@ -508,7 +599,6 @@ def render_page_to_pil(doc,
     page = doc[page_index]
     rect = page.rect
     scale = min(max_px / rect.width, max_px / rect.height)
-
     pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
     return img
@@ -620,6 +710,7 @@ def save_cropped_band():
     y0_ratio = float(request.form.get("y0_ratio"))
     y1_ratio = float(request.form.get("y1_ratio"))
     template_name = request.form.get("template_name") or "band_template"
+    use_color = request.form.get("use_color") == "1"  # カラーフラグ
 
     if not pdf_filename or not pdf_id:
         flash("情報が不足しています")
@@ -640,13 +731,18 @@ def save_cropped_band():
 
         band_img = img.crop((0, y0, w, y1))
 
+        # ★ 1200pxにリサイズして保存（ぼかしなし・rawで保存）
         target_width = 1200
         if w != target_width:
             new_h = int((y1 - y0) * (target_width / w))
             band_img = band_img.resize((target_width, new_h), Image.LANCZOS)
 
         base = os.path.splitext(os.path.basename(template_name))[0]
-        out_name = f"{base}_{pdf_id}.png"
+        # カラーフラグがある場合はファイル名に_colorを付与
+        if use_color:
+            out_name = f"{base}_color_{pdf_id}.png"
+        else:
+            out_name = f"{base}_{pdf_id}.png"
         out_path = os.path.join(DIR_TEMPLATES, out_name)
         band_img.save(out_path)
 
@@ -901,6 +997,53 @@ def rename_band():
 
     os.rename(old_path, new_path)
     flash(f"「{old_name}」を「{new_name_final}」に変更しました")
+
+    return redirect(url_for("bands"))
+
+
+@app.route("/bands/toggle_color", methods=["POST"])
+def toggle_color_band():
+    filename = request.form.get("filename")
+    if not filename:
+        flash("ファイル名が指定されていません")
+        return redirect(url_for("bands"))
+
+    safe_name = os.path.basename(filename)
+    old_path = os.path.join(DIR_TEMPLATES, safe_name)
+
+    if not os.path.isfile(old_path):
+        flash("ファイルが見つかりませんでした")
+        return redirect(url_for("bands"))
+
+    root, ext = os.path.splitext(safe_name)
+
+    # _color_<uuid> または _color が含まれるか判定
+    if "_color" in root:
+        # カラー → グレースケール: _color を除去
+        new_root = root.replace("_color", "", 1)
+        action = "グレースケール"
+    else:
+        # グレースケール → カラー: 先頭部分の末尾に _color を挿入
+        # 例: アイディホーム_<uuid> → アイディホーム_color_<uuid>
+        # uuidっぽいパターン（最後の_以降が36文字）があれば手前に挿入
+        import re
+        uuid_pattern = r'^(.+?)(_[0-9a-f\-]{36})$'
+        m = re.match(uuid_pattern, root)
+        if m:
+            new_root = m.group(1) + "_color" + m.group(2)
+        else:
+            new_root = root + "_color"
+        action = "カラー"
+
+    new_name = new_root + ext
+    new_path = os.path.join(DIR_TEMPLATES, new_name)
+
+    if os.path.exists(new_path) and new_path != old_path:
+        flash("同じ名前のファイルが既に存在します")
+        return redirect(url_for("bands"))
+
+    os.rename(old_path, new_path)
+    flash(f"「{safe_name}」を{action}モードに変更しました → 「{new_name}」")
 
     return redirect(url_for("bands"))
 

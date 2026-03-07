@@ -47,6 +47,12 @@
     .template-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
     .name-input { width: 160px; font-size: 13px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; }
     .btn-rename { background: #555; color: #fff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+
+    /* カラーモード切り替えボタン */
+    .btn-color-on  { background: #e74c3c; color: #fff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; white-space: nowrap; }
+    .btn-color-off { background: #95a5a6; color: #fff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; white-space: nowrap; }
+    .btn-color-on:hover  { background: #c0392b; }
+    .btn-color-off:hover { background: #7f8c8d; }
   </style>
 </head>
 <body>
@@ -136,6 +142,15 @@
                   <input type="hidden" name="old_name" value="{{ t }}">
                   <input type="text" name="new_name" value="{{ t }}" class="name-input">
                   <button type="submit" class="btn-rename">変更</button>
+                </form>
+                <!-- カラーモード切り替え -->
+                <form action="{{ url_for('toggle_color_band') }}" method="post">
+                  <input type="hidden" name="filename" value="{{ t }}">
+                  {% if '_color' in t %}
+                    <button type="submit" class="btn-color-on" title="カラーモード有効 → クリックでグレーに変更">🎨 カラー</button>
+                  {% else %}
+                    <button type="submit" class="btn-color-off" title="グレーモード → クリックでカラーに変更">⬜ グレー</button>
+                  {% endif %}
                 </form>
                 <form action="{{ url_for('delete_band') }}" method="post" onsubmit="return confirm('「{{ t }}」を削除しますか？');">
                   <input type="hidden" name="filename" value="{{ t }}">
