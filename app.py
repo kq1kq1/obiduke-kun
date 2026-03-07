@@ -277,7 +277,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
 
     def build_candidate_windows(
             mode: str,
-            offset_step_landscape: float = 0.02,
+            offset_step_landscape: float = 0.01,  # 0.02→0.01: ±11px→±5px精度
             bottom_step_portrait: float = 0.02,
             center_step_portrait: float = 0.005,  # 0.01→0.005: ±5px精度
     ) -> list[tuple[int, int]]:
