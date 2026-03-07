@@ -2,6 +2,7 @@ print("=== Flask server started! ===")
 import os
 import uuid
 import json
+import re
 from dataclasses import dataclass
 from typing import Optional, List
 from threading import Thread, Lock
@@ -30,6 +31,7 @@ from skimage.metrics import structural_similarity as ssim
 DEBUG_DETECT = True
 
 BLUR_RADIUS = 3
+MAX_PX = 1600  # 2200→1600: 処理速度約2倍・出力PDFサイズ約半分
 
 
 @dataclass
@@ -45,6 +47,9 @@ class DetectionConfig:
     step_ratio: float = 0.03
     duplicate_ssim_threshold: float = 0.98
     band_height_ratio: float = 0.16
+
+    # hrフィルタ: expected_hr ± この値の範囲のウィンドウのみ比較
+    hr_filter_margin: float = 0.015
 
 
 BASE = os.path.dirname(__file__)
@@ -170,18 +175,18 @@ def to_color_blurred(pil_img):
 
 
 def resize_gray(arr, h, w):
-    """グレー画像をリサイズしてぼかす（resize→blur順）"""
+    """グレー画像をリサイズしてからぼかす（resize→blur順）"""
     img = Image.fromarray((arr * 255).astype(np.uint8))
     img = img.resize((w, h), Image.LANCZOS)
-    img = img.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))  # ★ リサイズ後にぼかす
+    img = img.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
     return np.asarray(img, dtype=np.float32) / 255.0
 
 
 def resize_color(arr, h, w):
-    """カラー画像をリサイズしてぼかす（resize→blur順）"""
+    """カラー画像をリサイズしてからぼかす（resize→blur順）"""
     img = Image.fromarray((arr * 255).astype(np.uint8))
     img = img.resize((w, h), Image.LANCZOS)
-    img = img.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))  # ★ リサイズ後にぼかす
+    img = img.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
     return np.asarray(img, dtype=np.float32) / 255.0
 
 
@@ -223,10 +228,9 @@ class TemplateDB:
 
         for f in files:
             path = os.path.join(DIR_TEMPLATES, f)
-            gray = load_gray_raw(path)  # ★ ぼかしなしrawで読み込む
-            # ファイル名に_colorが含まれる場合はカラーも読み込む
+            gray = load_gray_raw(path)
             if "_color" in os.path.splitext(f)[0]:
-                color = load_color_raw(path)  # ★ ぼかしなしrawで読み込む
+                color = load_color_raw(path)
             else:
                 color = None
             self.items.append(BandTemplate(f, gray, color))
@@ -266,6 +270,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
     resized_cache: dict[tuple, np.ndarray] = {}
     mse_prefilter = float(getattr(config, "mse_threshold", 0.06)) * float(
         getattr(config, "mse_prefilter_multiplier", 1.7))
+    hr_margin = float(getattr(config, "hr_filter_margin", 0.015))
 
     region_w_global = w
     best_any = None
@@ -274,7 +279,8 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
             mode: str,
             offset_step_landscape: float = 0.02,
             bottom_step_portrait: float = 0.02,
-            center_step_portrait: float = 0.01) -> list[tuple[int, int]]:
+            center_step_portrait: float = 0.005,  # 0.01→0.005: ±5px精度
+    ) -> list[tuple[int, int]]:
         candidate_windows: list[tuple[int, int]] = []
 
         if orient == "landscape":
@@ -362,32 +368,54 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
     def scan(candidate_windows: list[tuple[int, int]]):
         nonlocal best_any
         mse_pass_count = 0
+        skipped_hr = 0
 
         for (y0, y1) in candidate_windows:
-            for tmpl in db.items:
-                use_color = tmpl.is_color and color_blurred is not None
+            win_h = y1 - y0
+            win_hr = win_h / h
 
-                patch, resized = get_patch_and_resized(tmpl, y0, y1, use_color)
-                if patch is None:
+            for tmpl in db.items:
+                # ★ hrフィルタ: テンプレの期待高さ比率から外れたウィンドウをスキップ
+                scale_to_page = w / float(tmpl.w)
+                expected_hr = (tmpl.h * scale_to_page) / h
+                if abs(win_hr - expected_hr) > hr_margin:
+                    skipped_hr += 1
                     continue
 
-                m1 = mse(patch, resized)
-                prefilter = mse_prefilter * 3.0 if use_color else mse_prefilter
-                if m1 > prefilter:
+                use_color = tmpl.is_color and color_blurred is not None
+
+                # ★ グレーMSEで先行フィルタ（カラーテンプレも先にグレーで弾く）
+                gray_patch, gray_resized = get_patch_and_resized(
+                    tmpl, y0, y1, use_color=False)
+                if gray_patch is None:
+                    continue
+
+                m_gray = mse(gray_patch, gray_resized)
+                if m_gray > mse_prefilter:
                     continue
 
                 mse_pass_count += 1
 
                 if use_color:
+                    patch, resized = get_patch_and_resized(tmpl,
+                                                           y0,
+                                                           y1,
+                                                           use_color=True)
+                    if patch is None:
+                        continue
+                    m1 = mse(patch, resized)
                     s1 = ssim(patch, resized, data_range=1.0, channel_axis=2)
+                    if DEBUG_DETECT:
+                        print(
+                            f"[color-ssim] win=({y0},{y1}) s1={s1:.3f} mse={m1:.4f}"
+                        )
                 else:
-                    s1 = ssim(patch, resized, data_range=1.0)
+                    s1 = ssim(gray_patch, gray_resized, data_range=1.0)
+                    m1 = m_gray
 
                 region_h = y1 - y0
-                t_h = tmpl.h
-                target_w = gray_blurred.shape[1]
-                scale = target_w / float(tmpl.w)
-                target_h = int(t_h * scale)
+                scale = w / float(tmpl.w)
+                target_h = int(tmpl.h * scale)
                 v_offset = (region_h - target_h) // 2
                 gy0 = y0 + v_offset
                 gy1 = gy0 + target_h
@@ -398,45 +426,61 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
                 if s1 >= config.ssim_threshold and m1 <= config.mse_threshold:
                     if DEBUG_DETECT:
                         print(
-                            f"[scan] page={page_index} mse_pass={mse_pass_count} HIT ssim={s1:.3f} tmpl={tmpl.name}"
-                        )
+                            f"[scan] page={page_index} mse_pass={mse_pass_count} "
+                            f"HIT ssim={s1:.3f} tmpl={tmpl.name}")
                     return (s1, m1, orient, 0, gy0, region_w_global, gy1, tmpl)
-
-                if tmpl.is_color:
-                    print(f"[color-ssim] win=({y0},{y1}) s1={s1:.3f}")
 
                 if s1 >= 0.92:
                     if DEBUG_DETECT:
                         print(
-                            f"[scan] page={page_index} mse_pass={mse_pass_count} HIT ssim={s1:.3f} tmpl={tmpl.name}"
-                        )
+                            f"[scan] page={page_index} mse_pass={mse_pass_count} "
+                            f"HIT ssim={s1:.3f} tmpl={tmpl.name}")
                     return (s1, m1, orient, 0, gy0, region_w_global, gy1, tmpl)
 
         if DEBUG_DETECT:
-            print(f"[scan] page={page_index} mse_pass={mse_pass_count} no_hit")
+            print(f"[scan] page={page_index} mse_pass={mse_pass_count} "
+                  f"skipped_hr={skipped_hr} no_hit")
         return None
 
     def scan_single_tmpl(candidate_windows: list[tuple[int, int]], tmpl):
         use_color = tmpl.is_color and color_blurred is not None
 
         for (y0, y1) in candidate_windows:
-            patch, resized = get_patch_and_resized(tmpl, y0, y1, use_color)
-            if patch is None:
+            win_h = y1 - y0
+            win_hr = win_h / h
+
+            # hrフィルタ
+            scale_to_page = w / float(tmpl.w)
+            expected_hr = (tmpl.h * scale_to_page) / h
+            if abs(win_hr - expected_hr) > hr_margin:
                 continue
 
-            m1 = mse(patch, resized)
-            prefilter = mse_prefilter * 3.0 if use_color else mse_prefilter
-            if m1 > prefilter:
+            # グレーMSEで先行フィルタ
+            gray_patch, gray_resized = get_patch_and_resized(tmpl,
+                                                             y0,
+                                                             y1,
+                                                             use_color=False)
+            if gray_patch is None:
+                continue
+            m_gray = mse(gray_patch, gray_resized)
+            if m_gray > mse_prefilter:
                 continue
 
             if use_color:
+                patch, resized = get_patch_and_resized(tmpl,
+                                                       y0,
+                                                       y1,
+                                                       use_color=True)
+                if patch is None:
+                    continue
+                m1 = mse(patch, resized)
                 s1 = ssim(patch, resized, data_range=1.0, channel_axis=2)
             else:
-                s1 = ssim(patch, resized, data_range=1.0)
+                s1 = ssim(gray_patch, gray_resized, data_range=1.0)
+                m1 = m_gray
 
             region_h = y1 - y0
-            target_w = gray_blurred.shape[1]
-            scale = target_w / float(tmpl.w)
+            scale = w / float(tmpl.w)
             target_h = int(tmpl.h * scale)
             v_offset = (region_h - target_h) // 2
             gy0 = y0 + v_offset
@@ -468,8 +512,8 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
             center_windows = build_candidate_windows("center")
             if DEBUG_DETECT:
                 print(
-                    f"[center-scan] page={page_index} windows={len(center_windows)} mse_prefilter={mse_prefilter:.4f}"
-                )
+                    f"[center-scan] page={page_index} windows={len(center_windows)} "
+                    f"mse_prefilter={mse_prefilter:.4f}")
             hit_center = scan(center_windows)
             if hit_center is not None:
                 _, m_hit2, o2, x02, y02, x12, y12, hit_tmpl2 = hit_center
@@ -495,9 +539,8 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
             print(f"[detect] page={page_index} NO band detected")
         else:
             for (o, x0, y0, x1, y1) in results:
-                print(
-                    f"[detect] page={page_index} HIT orient={o} rect=({x0},{y0})-({x1},{y1})"
-                )
+                print(f"[detect] page={page_index} HIT orient={o} "
+                      f"rect=({x0},{y0})-({x1},{y1})")
 
     return results
 
@@ -546,9 +589,8 @@ def process_pdf_single(input_path, own_band_path, page_offset=0):
     missed = []
 
     for i, page in enumerate(doc):
-        max_px = 2200
         rect = page.rect
-        scale = min(max_px / rect.width, max_px / rect.height)
+        scale = min(MAX_PX / rect.width, MAX_PX / rect.height)
 
         pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
@@ -595,7 +637,9 @@ progress = {
 
 def render_page_to_pil(doc,
                        page_index: int,
-                       max_px: int = 2200) -> Image.Image:
+                       max_px: int = None) -> Image.Image:
+    if max_px is None:
+        max_px = MAX_PX
     page = doc[page_index]
     rect = page.rect
     scale = min(max_px / rect.width, max_px / rect.height)
@@ -668,7 +712,7 @@ def extract_band_from_pdf():
     try:
         doc = fitz.open(pdf_path)
         page_index = 0
-        img = render_page_to_pil(doc, page_index, max_px=2200)
+        img = render_page_to_pil(doc, page_index)
 
         preview_name = f"preview_{pdf_id}.png"
         preview_path = os.path.join(DIR_UPLOAD, preview_name)
@@ -710,7 +754,7 @@ def save_cropped_band():
     y0_ratio = float(request.form.get("y0_ratio"))
     y1_ratio = float(request.form.get("y1_ratio"))
     template_name = request.form.get("template_name") or "band_template"
-    use_color = request.form.get("use_color") == "1"  # カラーフラグ
+    use_color = request.form.get("use_color") == "1"
 
     if not pdf_filename or not pdf_id:
         flash("情報が不足しています")
@@ -720,7 +764,7 @@ def save_cropped_band():
 
     try:
         doc = fitz.open(pdf_path)
-        img = render_page_to_pil(doc, page_index, max_px=2200)
+        img = render_page_to_pil(doc, page_index)
         w, h = img.size
 
         y0 = int(h * min(max(y0_ratio, 0.0), 1.0))
@@ -731,14 +775,13 @@ def save_cropped_band():
 
         band_img = img.crop((0, y0, w, y1))
 
-        # ★ 1200pxにリサイズして保存（ぼかしなし・rawで保存）
+        # 1200pxにリサイズして保存（rawで保存、ぼかしなし）
         target_width = 1200
         if w != target_width:
             new_h = int((y1 - y0) * (target_width / w))
             band_img = band_img.resize((target_width, new_h), Image.LANCZOS)
 
         base = os.path.splitext(os.path.basename(template_name))[0]
-        # カラーフラグがある場合はファイル名に_colorを付与
         if use_color:
             out_name = f"{base}_color_{pdf_id}.png"
         else:
@@ -846,7 +889,8 @@ def handle_pdf():
                 thumb.save(os.path.join(thumb_dir, f"{idx}.jpg"))
 
             first, *rest = all_pages
-            first.save(out_path, save_all=True, append_images=rest)
+            # ★ quality=85でJPEG圧縮: ファイルサイズ1/5〜1/8
+            first.save(out_path, save_all=True, append_images=rest, quality=85)
 
             with progress_lock:
                 progress["status"] = "done"
@@ -1017,16 +1061,10 @@ def toggle_color_band():
 
     root, ext = os.path.splitext(safe_name)
 
-    # _color_<uuid> または _color が含まれるか判定
     if "_color" in root:
-        # カラー → グレースケール: _color を除去
         new_root = root.replace("_color", "", 1)
         action = "グレースケール"
     else:
-        # グレースケール → カラー: 先頭部分の末尾に _color を挿入
-        # 例: アイディホーム_<uuid> → アイディホーム_color_<uuid>
-        # uuidっぽいパターン（最後の_以降が36文字）があれば手前に挿入
-        import re
         uuid_pattern = r'^(.+?)(_[0-9a-f\-]{36})$'
         m = re.match(uuid_pattern, root)
         if m:
