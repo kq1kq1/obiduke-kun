@@ -4,13 +4,22 @@
   <meta charset="utf-8" />
   <title>処理中</title>
   <style>
-    .wrap { max-width: 520px; margin: 40px auto; font-family: sans-serif; }
+    .wrap { max-width: 720px; margin: 40px auto; font-family: sans-serif; padding: 0 16px; }
     .bar { width: 100%; height: 16px; background: #eee; border-radius: 999px; overflow: hidden; }
     .bar > div { height: 100%; width: 0%; background: #222; transition: width .2s; }
     .muted { color:#666; font-size: 14px; }
     .btn { display:inline-block; padding:10px 14px; background:#222; color:#fff; border-radius:10px; text-decoration:none; margin-right: 8px; }
     .btn-back { display:inline-block; padding:10px 14px; background:#fff; color:#222; border:1px solid #ccc; border-radius:10px; text-decoration:none; }
     .err { color:#b00020; white-space: pre-wrap; }
+
+    /* 検出なしページ */
+    #missed-section { margin-top: 32px; display: none; }
+    #missed-section h3 { color: #b00020; margin-bottom: 8px; }
+    .missed-note { font-size: 13px; color: #666; margin-bottom: 16px; }
+    .thumb-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+    .thumb-card { border: 2px solid #f44336; border-radius: 8px; overflow: hidden; width: 160px; text-align: center; }
+    .thumb-card img { width: 100%; display: block; }
+    .thumb-label { font-size: 12px; padding: 4px; background: #fff3f3; color: #b00020; font-weight: bold; }
   </style>
 </head>
 <body>
@@ -23,7 +32,15 @@
       <a class="btn" id="dl" href="#">ダウンロード</a>
       <a class="btn-back" href="/">◀ トップに戻る</a>
     </p>
+
+    <!-- 検出なしページ一覧 -->
+    <div id="missed-section">
+      <h3>⚠️ 帯が検出できなかったページ</h3>
+      <p class="missed-note">以下のページは帯が検出されませんでした。PDFを確認して手動で対応してください。</p>
+      <div class="thumb-grid" id="thumb-grid"></div>
+    </div>
   </div>
+
   <script>
     const jobId = "{{ job_id }}";
     const bar = document.getElementById("bar");
@@ -31,16 +48,36 @@
     const err = document.getElementById("err");
     const done = document.getElementById("done");
     const dl = document.getElementById("dl");
+    const missedSection = document.getElementById("missed-section");
+    const thumbGrid = document.getElementById("thumb-grid");
     const intervalMs = 500;
+
     function buildDownloadUrl() {
       return `/download/${encodeURIComponent(jobId)}`;
     }
+
+    function showMissedPages(missedPages) {
+      if (!missedPages || missedPages.length === 0) return;
+      missedSection.style.display = "block";
+      thumbGrid.innerHTML = "";
+      missedPages.forEach(p => {
+        const card = document.createElement("div");
+        card.className = "thumb-card";
+        card.innerHTML = `
+          <img src="/thumb/${encodeURIComponent(jobId)}/${p.page_index}" alt="ページ${p.page_label}">
+          <div class="thumb-label">${p.page_label}</div>
+        `;
+        thumbGrid.appendChild(card);
+      });
+    }
+
     async function tick() {
       try {
         const res = await fetch("/progress", { cache: "no-store" });
         if (!res.ok) throw new Error(`progress fetch failed: ${res.status}`);
         const p = await res.json();
         if (p.job_id && jobId && p.job_id !== jobId) return;
+
         if (p.status === "running") {
           const total = p.total || 0;
           const current = p.current || 0;
@@ -49,13 +86,18 @@
           txt.textContent = `処理中：${current} / ${total} ページ（${pct}%）`;
           return;
         }
+
         if (p.status === "done") {
           bar.style.width = "100%";
-          txt.textContent = "完了しました";
+          const missedCount = p.missed_pages ? p.missed_pages.length : 0;
+          txt.textContent = missedCount > 0
+            ? `完了しました（未検出: ${missedCount}ページ）`
+            : "完了しました（全ページ検出済み）";
           const url = buildDownloadUrl();
           dl.href = url;
           done.style.display = "block";
           clearInterval(timer);
+          showMissedPages(p.missed_pages);
           const a = document.createElement("a");
           a.href = url;
           a.download = "";
@@ -64,11 +106,11 @@
           document.body.removeChild(a);
           return;
         }
+
         if (p.status === "error") {
           txt.textContent = "エラー";
           err.textContent = p.error || "unknown error";
           clearInterval(timer);
-          // エラー時も戻るボタンを表示
           done.style.display = "block";
           dl.style.display = "none";
           return;

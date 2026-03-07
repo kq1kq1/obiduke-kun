@@ -4,6 +4,11 @@
   <meta charset="UTF-8">
   <title>帯削除＋自社帯付けシステム</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <style>
+    .own-band-preview { max-height: 48px; max-width: 200px; border: 1px solid #ccc; border-radius: 4px; vertical-align: middle; }
+    select { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+    .no-band-warn { color: #b00020; font-size: 13px; }
+  </style>
 </head>
 <body>
 <h1>帯削除 ＋ 自社帯付け 自動処理</h1>
@@ -19,17 +24,41 @@
         </ul>
       {% endif %}
     {% endwith %}
+
     <form action="/process" method="post" enctype="multipart/form-data">
-      <input type="file" name="pdf_file" accept="application/pdf" required>
-      <br><br>
-      <button type="submit">処理開始</button>
+
+      <!-- 自社帯選択 -->
+      <div style="margin-bottom: 16px;">
+        <label style="font-weight:bold; display:block; margin-bottom:6px;">貼り付ける自社帯</label>
+        {% if own_bands %}
+          <div style="display:flex; align-items:center; gap:12px;">
+            <select name="own_band" id="own-band-select" onchange="updateBandPreview(this)">
+              {% for b in own_bands %}
+                <option value="{{ b }}">{{ b }}</option>
+              {% endfor %}
+            </select>
+            <img id="own-band-preview"
+              src="{{ url_for('own_band_file', filename=own_bands[0]) }}"
+              class="own-band-preview" alt="自社帯プレビュー">
+          </div>
+        {% else %}
+          <p class="no-band-warn">⚠️ 自社帯が登録されていません。<a href="/bands">テンプレ管理ページ</a>から登録してください。</p>
+        {% endif %}
+      </div>
+
+      <!-- PDF選択（複数可） -->
+      <div style="margin-bottom: 12px;">
+        <label style="font-weight:bold; display:block; margin-bottom:6px;">処理するPDF（複数選択可）</label>
+        <input type="file" name="pdf_file" accept="application/pdf" multiple required>
+      </div>
+
+      <button type="submit" {% if not own_bands %}disabled{% endif %}>処理開始</button>
     </form>
   </section>
 
   <section>
     <h2>登録済み 他社帯テンプレ</h2>
     {% if templates %}
-      {# 会社名でグループ化 #}
       {% set companies = [] %}
       {% for t in templates %}
         {% set company = t.split('_')[0] if '_' in t else '未分類' %}
@@ -39,7 +68,6 @@
       {% endfor %}
       <ul>
         {% for company in companies %}
-          {% set count = templates | selectattr('__class__') | list %}
           {% set cnt = [] %}
           {% for t in templates %}
             {% if (t.split('_')[0] if '_' in t else '未分類') == company %}
@@ -56,5 +84,11 @@
     <p><a href="/bands">▶ テンプレ管理ページへ</a></p>
   </section>
 
+<script>
+  function updateBandPreview(select) {
+    const name = select.value;
+    document.getElementById('own-band-preview').src = '/own_bands/' + encodeURIComponent(name);
+  }
+</script>
 </body>
 </html>

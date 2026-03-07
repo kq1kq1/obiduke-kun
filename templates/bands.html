@@ -9,12 +9,20 @@
     h1 { margin-bottom: 4px; }
     .back-link { margin-bottom: 20px; display: inline-block; }
 
-    .upload-section { background: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
-    .upload-section h2 { margin-top: 0; font-size: 16px; }
+    .section-box { background: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+    .section-box h2 { margin-top: 0; font-size: 16px; }
 
     .flash { list-style: none; padding: 0; }
     .flash li { background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; }
 
+    /* 自社帯一覧 */
+    .own-band-row { display: flex; align-items: center; gap: 12px; padding: 8px; border-bottom: 1px solid #eee; }
+    .own-band-row:last-child { border-bottom: none; }
+    .own-band-preview { max-width: 220px; max-height: 60px; border: 1px solid #ddd; border-radius: 4px; }
+    .own-band-name { font-size: 13px; color: #444; flex: 1; }
+    .btn-delete { background: #b00020; color: #fff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+
+    /* 他社帯一覧 */
     .bulk-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 10px 14px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; }
     .bulk-bar button { background: #b00020; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; }
     .bulk-bar button:disabled { background: #ccc; cursor: default; }
@@ -39,7 +47,6 @@
     .template-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
     .name-input { width: 160px; font-size: 13px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; }
     .btn-rename { background: #555; color: #fff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; }
-    .btn-delete { background: #b00020; color: #fff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; }
   </style>
 </head>
 <body>
@@ -56,8 +63,35 @@
   {% endif %}
 {% endwith %}
 
-<div class="upload-section">
-  <h2>📄 PDFから帯テンプレ作成</h2>
+<!-- ========== 自社帯管理 ========== -->
+<div class="section-box">
+  <h2>🏠 自社帯の管理</h2>
+  <form action="{{ url_for('upload_own_band') }}" method="post" enctype="multipart/form-data" style="margin-bottom:12px;">
+    <input type="file" name="own_band_file" accept="image/*" required>
+    <button type="submit">アップロード</button>
+  </form>
+
+  {% if own_bands %}
+    <div>
+      {% for b in own_bands %}
+        <div class="own-band-row">
+          <img src="{{ url_for('own_band_file', filename=b) }}" class="own-band-preview" alt="{{ b }}">
+          <span class="own-band-name">{{ b }}</span>
+          <form action="{{ url_for('delete_own_band') }}" method="post" onsubmit="return confirm('「{{ b }}」を削除しますか？');">
+            <input type="hidden" name="filename" value="{{ b }}">
+            <button type="submit" class="btn-delete">削除</button>
+          </form>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p style="color:#888;font-size:13px;">自社帯が登録されていません。</p>
+  {% endif %}
+</div>
+
+<!-- ========== 他社帯テンプレ追加 ========== -->
+<div class="section-box">
+  <h2>📄 他社帯テンプレをPDFから作成</h2>
   <form action="{{ url_for('extract_band_from_pdf') }}" method="post" enctype="multipart/form-data">
     <p style="font-size:13px;color:#555;margin:4px 0 8px;">PDFから帯を切り取ってテンプレ登録します。</p>
     <input type="file" name="pdf_file" accept="application/pdf" required>
@@ -65,16 +99,14 @@
   </form>
 </div>
 
-<h2>登録テンプレ（{{ templates|length }}件）</h2>
+<!-- ========== 他社帯テンプレ一覧 ========== -->
+<h2>他社帯テンプレ（{{ templates|length }}件）</h2>
 
 {% if templates %}
   <form id="bulk-delete-form" action="{{ url_for('delete_band_bulk') }}" method="post" onsubmit="return confirmBulkDelete();">
     <div class="bulk-bar">
       <span id="selected-count">0件選択中</span>
       <button type="submit" id="bulk-delete-btn" disabled>選択したものを削除</button>
-      <label style="font-size:13px;cursor:pointer;">
-        <input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"> すべて選択
-      </label>
     </div>
 
     {% set groups = {} %}
@@ -126,25 +158,15 @@
     header.classList.toggle('open');
     header.nextElementSibling.classList.toggle('open');
   }
-
   document.querySelectorAll('.company-header').forEach(h => {
     h.classList.add('open');
     h.nextElementSibling.classList.add('open');
   });
-
   function updateCount() {
     const checked = document.querySelectorAll('input[name=filenames]:checked').length;
     document.getElementById('selected-count').textContent = checked + '件選択中';
     document.getElementById('bulk-delete-btn').disabled = checked === 0;
-    document.getElementById('select-all').checked =
-      checked === document.querySelectorAll('input[name=filenames]').length;
   }
-
-  function toggleSelectAll(cb) {
-    document.querySelectorAll('input[name=filenames]').forEach(el => el.checked = cb.checked);
-    updateCount();
-  }
-
   function confirmBulkDelete() {
     const count = document.querySelectorAll('input[name=filenames]:checked').length;
     return confirm(count + '件のテンプレを削除しますか？');

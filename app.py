@@ -18,7 +18,7 @@ from flask import (
 )
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 import fitz  # PyMuPDF
 from skimage.metrics import structural_similarity as ssim
 
@@ -27,6 +27,9 @@ from skimage.metrics import structural_similarity as ssim
 # ============================================
 
 DEBUG_DETECT = True
+
+# ガウシアンぼかしの半径（ラスタライズのズレを吸収する）
+BLUR_RADIUS = 3
 
 
 @dataclass
@@ -38,6 +41,9 @@ class DetectionConfig:
     ssim_threshold: float = 0.65
     mse_threshold: float = 0.06
 
+    # ぼかし後は均一化されてMSEが小さくなるため、プリフィルタは緩めに設定
+    mse_prefilter_multiplier: float = 3.0
+
     step_ratio: float = 0.03
     duplicate_ssim_threshold: float = 0.98
     band_height_ratio: float = 0.16
@@ -45,9 +51,35 @@ class DetectionConfig:
 
 BASE = os.path.dirname(__file__)
 DIR_TEMPLATES = os.path.join(BASE, "band_templates")
+DIR_OWN_BANDS = os.path.join(BASE, "own_bands")
 DIR_UPLOAD = os.path.join(BASE, "uploads")
 DIR_OUTPUT = os.path.join(BASE, "outputs")
-OWN_BAND = os.path.join(BASE, "band_default.png")
+OWN_BAND_DEFAULT = os.path.join(BASE, "band_default.png")
+
+
+def get_own_band_path(band_name=None):
+    if band_name:
+        path = os.path.join(DIR_OWN_BANDS, os.path.basename(band_name))
+        if os.path.isfile(path):
+            return path
+    if os.path.isdir(DIR_OWN_BANDS):
+        files = [
+            f for f in os.listdir(DIR_OWN_BANDS)
+            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+        ]
+        if files:
+            return os.path.join(DIR_OWN_BANDS, sorted(files)[0])
+    return OWN_BAND_DEFAULT
+
+
+def list_own_bands():
+    if not os.path.isdir(DIR_OWN_BANDS):
+        return []
+    files = [
+        f for f in os.listdir(DIR_OWN_BANDS)
+        if f.lower().endswith((".png", ".jpg", ".jpeg"))
+    ]
+    return sorted(files)
 
 
 def clear_old_files():
@@ -62,9 +94,16 @@ def clear_old_files():
                     os.remove(path)
                 except Exception as e:
                     print(f"[warn] {path} を削除できませんでした: {e}")
+            elif os.path.isdir(path):
+                try:
+                    import shutil
+                    shutil.rmtree(path)
+                except Exception as e:
+                    print(f"[warn] {path} を削除できませんでした: {e}")
 
 
 os.makedirs(DIR_TEMPLATES, exist_ok=True)
+os.makedirs(DIR_OWN_BANDS, exist_ok=True)
 os.makedirs(DIR_UPLOAD, exist_ok=True)
 os.makedirs(DIR_OUTPUT, exist_ok=True)
 
@@ -75,8 +114,17 @@ config = DetectionConfig()
 # ============================================
 
 
-def load_gray(path):
+def load_gray_blurred(path):
+    """テンプレ画像をグレースケール＋ぼかしで読み込む"""
     img = Image.open(path).convert("L")
+    img = img.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
+    return np.asarray(img, dtype=np.float32) / 255.0
+
+
+def to_gray_blurred(pil_img):
+    """PIL画像をグレースケール＋ぼかしに変換"""
+    img = pil_img.convert("L")
+    img = img.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
     return np.asarray(img, dtype=np.float32) / 255.0
 
 
@@ -99,7 +147,7 @@ class BandTemplate:
 
     def __init__(self, name, arr):
         self.name = name
-        self.gray = arr
+        self.gray = arr  # ぼかし済みグレースケール
         self.h, self.w = arr.shape
 
 
@@ -117,7 +165,7 @@ class TemplateDB:
         ]
         for f in files:
             path = os.path.join(DIR_TEMPLATES, f)
-            arr = load_gray(path)
+            arr = load_gray_blurred(path)  # ぼかし済みで読み込み
             self.items.append(BandTemplate(f, arr))
 
         if DEBUG_DETECT:
@@ -131,8 +179,9 @@ db = TemplateDB()
 # ============================================
 
 
-def detect_band(gray, page_index=None):
-    h, w = gray.shape
+def detect_band(gray_blurred, page_index=None):
+    """ぼかし済みグレースケール画像から帯を検出する"""
+    h, w = gray_blurred.shape
     orient = "landscape" if w >= h else "portrait"
 
     if DEBUG_DETECT:
@@ -149,7 +198,8 @@ def detect_band(gray, page_index=None):
         r += step_height
 
     resized_cache: dict[tuple[int, int, int], np.ndarray] = {}
-    mse_prefilter = float(getattr(config, "mse_threshold", 0.15)) * 1.2
+    mse_prefilter = float(getattr(config, "mse_threshold", 0.06)) * float(
+        getattr(config, "mse_prefilter_multiplier", 3.0))
 
     region_w_global = w
     best_any = None
@@ -192,8 +242,8 @@ def detect_band(gray, page_index=None):
                         offset += bottom_step_portrait
 
                 if mode in ("all", "center"):
-                    center_ratio = 0.40
-                    while center_ratio <= 0.55 + 1e-6:
+                    center_ratio = 0.35
+                    while center_ratio <= 0.75 + 1e-6:
                         center = int(h * center_ratio)
                         y0 = center - win_h // 2
                         y1 = y0 + win_h
@@ -207,7 +257,7 @@ def detect_band(gray, page_index=None):
         nonlocal best_any
 
         for (y0, y1) in candidate_windows:
-            region = gray[y0:y1, :]
+            region = gray_blurred[y0:y1, :]
             if region.size == 0:
                 continue
 
@@ -252,7 +302,55 @@ def detect_band(gray, page_index=None):
 
                 if (s1 >= config.ssim_threshold
                         and m1 <= config.mse_threshold):
-                    return (s1, m1, orient, gx0, gy0, gx1, gy1)
+                    return (s1, m1, orient, gx0, gy0, gx1, gy1, tmpl)
+
+                # 非常に高いスコアなら即終了
+                if s1 >= 0.92:
+                    return (s1, m1, orient, gx0, gy0, gx1, gy1, tmpl)
+
+        return None
+
+    def scan_single_tmpl(candidate_windows: list[tuple[int, int]], tmpl):
+        """ヒット済みのテンプレ1件だけでスキャンする（center用）"""
+        for (y0, y1) in candidate_windows:
+            region = gray_blurred[y0:y1, :]
+            if region.size == 0:
+                continue
+
+            region_h, region_w = region.shape
+            t_h, t_w = tmpl.h, tmpl.w
+            if t_h <= 0 or t_w <= 0:
+                continue
+
+            target_w = region_w
+            scale = target_w / float(t_w)
+            target_h = int(t_h * scale)
+
+            if target_h <= 0 or target_h > region_h:
+                continue
+
+            key = (id(tmpl), target_h, target_w)
+            resized = resized_cache.get(key)
+            if resized is None:
+                resized = resize_gray(tmpl.gray, target_h, target_w)
+                resized_cache[key] = resized
+
+            v_offset = (region_h - target_h) // 2
+            y0_patch = v_offset
+            y1_patch = v_offset + target_h
+            patch = region[y0_patch:y1_patch, :]
+
+            m1 = mse(patch, resized)
+            if m1 > mse_prefilter:
+                continue
+
+            s1 = ssim(patch, resized, data_range=1.0)
+
+            gy0 = y0 + y0_patch
+            gy1 = y0 + y1_patch
+
+            if s1 >= config.ssim_threshold and m1 <= config.mse_threshold:
+                return (s1, m1, orient, 0, gy0, region_w_global, gy1, tmpl)
 
         return None
 
@@ -264,32 +362,34 @@ def detect_band(gray, page_index=None):
                                                  center_step_portrait=0.01)
         hit_bottom = scan(bottom_windows)
         if hit_bottom is not None:
-            _, m_hit, o, x0, y0, x1, y1 = hit_bottom
+            _, m_hit, o, x0, y0, x1, y1, hit_tmpl = hit_bottom
             results.append((o, x0, y0, x1, y1))
 
+            # bottomでヒットしたテンプレだけでcenterをスキャン
             center_windows = build_candidate_windows("center",
                                                      bottom_step_portrait=0.01,
                                                      center_step_portrait=0.01)
-            hit_center = scan(center_windows)
+            hit_center = scan_single_tmpl(center_windows, hit_tmpl)
             if hit_center is not None:
-                _, m_hit2, o2, x02, y02, x12, y12 = hit_center
+                _, m_hit2, o2, x02, y02, x12, y12, _ = hit_center
                 if not (abs(y02 - y0) < 5 and abs(y12 - y1) < 5):
                     results.append((o2, x02, y02, x12, y12))
 
         else:
+            # bottomでヒットなし → 全テンプレでcenterをスキャン
             center_windows = build_candidate_windows("center",
                                                      bottom_step_portrait=0.01,
                                                      center_step_portrait=0.01)
             hit_center = scan(center_windows)
             if hit_center is not None:
-                _, m_hit2, o2, x02, y02, x12, y12 = hit_center
+                _, m_hit2, o2, x02, y02, x12, y12, _ = hit_center
                 results.append((o2, x02, y02, x12, y12))
 
     else:
         windows = build_candidate_windows("all", offset_step_landscape=0.02)
         hit = scan(windows)
         if hit is not None:
-            _, _, o, x0, y0, x1, y1 = hit
+            _, _, o, x0, y0, x1, y1, _ = hit
             results.append((o, x0, y0, x1, y1))
 
     if DEBUG_DETECT and best_any is not None:
@@ -315,7 +415,7 @@ def detect_band(gray, page_index=None):
 # ============================================
 
 
-def apply_band(page_img, det):
+def apply_band(page_img, det, own_band_path):
     orient, x0, y0, x1, y1 = det
 
     page = page_img.convert("RGBA")
@@ -335,7 +435,7 @@ def apply_band(page_img, det):
     draw = ImageDraw.Draw(page)
     draw.rectangle([(x0, y0), (x1, y1)], fill=(255, 255, 255, 255))
 
-    band = Image.open(OWN_BAND).convert("RGBA")
+    band = Image.open(own_band_path).convert("RGBA")
     band = band.resize((band_w, band_h), Image.LANCZOS)
 
     page.paste(band, (x0, y0), band)
@@ -344,20 +444,15 @@ def apply_band(page_img, det):
 
 
 # ============================================
-# PDF処理
+# PDF処理（1ファイル分）
 # ============================================
 
 
-def process_pdf(input_path, output_path):
-    db.load()
+def process_pdf_single(input_path, own_band_path, page_offset=0):
+    """1つのPDFを処理してページ画像リストと未検出ページリストを返す"""
     doc = fitz.open(input_path)
     pages_out = []
-    with progress_lock:
-        progress["status"] = "running"
-        progress["current"] = 0
-        progress["total"] = len(doc)
-        progress["error"] = None
-        progress["out_path"] = output_path
+    missed = []
 
     for i, page in enumerate(doc):
         max_px = 2200
@@ -367,21 +462,25 @@ def process_pdf(input_path, output_path):
         pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
-        g = img.convert("L")
-        g_arr = np.asarray(g, dtype=np.float32) / 255.0
+        # グレースケール＋ぼかしで検出
+        g_blurred = to_gray_blurred(img)
+        dets = detect_band(g_blurred, page_index=i + 1)
 
-        dets = detect_band(g_arr, page_index=i + 1)
-
-        for det in dets:
-            img = apply_band(img, det)
+        if dets:
+            for det in dets:
+                img = apply_band(img, det, own_band_path)
+        else:
+            missed.append({
+                "page_index": page_offset + i,
+                "page_label": f"{page_offset + i + 1}ページ目",
+            })
 
         with progress_lock:
-            progress["current"] = i + 1
+            progress["current"] += 1
 
         pages_out.append(img)
 
-    first, *rest = pages_out
-    first.save(output_path, save_all=True, append_images=rest)
+    return pages_out, missed
 
 
 # ============================================
@@ -393,11 +492,13 @@ app.secret_key = "secretkey"
 
 progress_lock = Lock()
 progress = {
-    "status": "idle",  # idle / running / done / error
+    "status": "idle",
     "current": 0,
     "total": 0,
     "job_id": None,
     "error": None,
+    "download": None,
+    "missed_pages": [],
 }
 
 
@@ -569,43 +670,92 @@ def save_cropped_band():
 
 @app.route("/")
 def index():
-    files = os.listdir(DIR_TEMPLATES)
-    return render_template("index.html", templates=files)
+    other_band_files = os.listdir(DIR_TEMPLATES)
+    own_bands = list_own_bands()
+    return render_template("index.html",
+                           templates=other_band_files,
+                           own_bands=own_bands)
 
 
 @app.route("/process", methods=["POST"])
 def handle_pdf():
-    if "pdf_file" not in request.files:
-        flash("PDFファイルがありません")
+    pdf_files = request.files.getlist("pdf_file")
+    own_band_name = request.form.get("own_band", "")
+
+    valid_pdfs = [
+        f for f in pdf_files
+        if f.filename and f.filename.lower().endswith(".pdf")
+    ]
+    if not valid_pdfs:
+        flash("PDFをアップしてください")
         return redirect(url_for("index"))
 
-    pdf = request.files["pdf_file"]
-    if pdf.filename == "" or (not pdf.filename.lower().endswith(".pdf")):
-        flash("PDFをアップしてください")
+    own_band_path = get_own_band_path(own_band_name)
+    if not os.path.isfile(own_band_path):
+        flash("自社帯が見つかりません。band_default.pngを確認してください。")
         return redirect(url_for("index"))
 
     clear_old_files()
 
     job_id = str(uuid.uuid4())
-    in_path = os.path.join(DIR_UPLOAD, job_id + ".pdf")
     out_path = os.path.join(DIR_OUTPUT, job_id + "_out.pdf")
-    pdf.save(in_path)
+
+    in_paths = []
+    for i, pdf in enumerate(valid_pdfs):
+        in_path = os.path.join(DIR_UPLOAD, f"{job_id}_{i}.pdf")
+        pdf.save(in_path)
+        in_paths.append(in_path)
+
+    total_pages = 0
+    for p in in_paths:
+        try:
+            doc = fitz.open(p)
+            total_pages += len(doc)
+            doc.close()
+        except Exception:
+            pass
 
     with progress_lock:
         progress["status"] = "running"
         progress["current"] = 0
-        progress["total"] = 0
+        progress["total"] = total_pages
         progress["job_id"] = job_id
         progress["error"] = None
         progress["download"] = None
+        progress["missed_pages"] = []
 
     def worker():
         try:
-            process_pdf(in_path, out_path)
+            db.load()
+            all_pages = []
+            all_missed = []
+            page_offset = 0
+
+            for in_path in in_paths:
+                pages, missed = process_pdf_single(in_path, own_band_path,
+                                                   page_offset)
+                all_pages.extend(pages)
+                all_missed.extend(missed)
+                page_offset += len(pages)
+
+            if not all_pages:
+                raise Exception("処理結果が空です")
+
+            thumb_dir = os.path.join(DIR_OUTPUT, job_id + "_thumbs")
+            os.makedirs(thumb_dir, exist_ok=True)
+            for m in all_missed:
+                idx = m["page_index"]
+                thumb = all_pages[idx].copy()
+                thumb.thumbnail((300, 400))
+                thumb.save(os.path.join(thumb_dir, f"{idx}.jpg"))
+
+            first, *rest = all_pages
+            first.save(out_path, save_all=True, append_images=rest)
 
             with progress_lock:
                 progress["status"] = "done"
                 progress["download"] = os.path.basename(out_path)
+                progress["missed_pages"] = all_missed
 
         except Exception as e:
             with progress_lock:
@@ -619,11 +769,14 @@ def handle_pdf():
 
 @app.route("/bands")
 def bands():
-    files = [
+    other_bands = [
         f for f in os.listdir(DIR_TEMPLATES)
         if f.lower().endswith((".png", ".jpg", ".jpeg"))
     ]
-    return render_template("bands.html", templates=files)
+    own_bands = list_own_bands()
+    return render_template("bands.html",
+                           templates=other_bands,
+                           own_bands=own_bands)
 
 
 @app.route("/band_templates/<path:filename>")
@@ -631,21 +784,39 @@ def band_template_file(filename):
     return send_from_directory(DIR_TEMPLATES, filename)
 
 
-@app.route("/bands/upload", methods=["POST"])
-def upload_band():
-    if "band_file" not in request.files:
-        flash("帯画像がありません")
-        return redirect(url_for("bands"))
+@app.route("/own_bands/<path:filename>")
+def own_band_file(filename):
+    return send_from_directory(DIR_OWN_BANDS, filename)
 
-    img = request.files["band_file"]
-    if img.filename == "":
+
+@app.route("/own_bands/upload", methods=["POST"])
+def upload_own_band():
+    if "own_band_file" not in request.files:
+        flash("ファイルがありません")
+        return redirect(url_for("bands"))
+    f = request.files["own_band_file"]
+    if f.filename == "":
         flash("ファイル未選択")
         return redirect(url_for("bands"))
+    save_path = os.path.join(DIR_OWN_BANDS, os.path.basename(f.filename))
+    f.save(save_path)
+    flash(f"自社帯「{f.filename}」を登録しました")
+    return redirect(url_for("bands"))
 
-    save_path = os.path.join(DIR_TEMPLATES, os.path.basename(img.filename))
-    img.save(save_path)
 
-    flash("登録しました")
+@app.route("/own_bands/delete", methods=["POST"])
+def delete_own_band():
+    filename = request.form.get("filename")
+    if not filename:
+        flash("ファイル名が指定されていません")
+        return redirect(url_for("bands"))
+    safe_name = os.path.basename(filename)
+    path = os.path.join(DIR_OWN_BANDS, safe_name)
+    if os.path.isfile(path):
+        os.remove(path)
+        flash(f"「{safe_name}」を削除しました")
+    else:
+        flash("ファイルが見つかりませんでした")
     return redirect(url_for("bands"))
 
 
@@ -743,6 +914,7 @@ def get_progress():
             "total": progress["total"],
             "job_id": progress["job_id"],
             "error": progress["error"],
+            "missed_pages": progress.get("missed_pages", []),
         }
 
 
@@ -752,6 +924,16 @@ def download(job_id):
     if not os.path.exists(out_path):
         return "not ready", 404
     return send_file(out_path, as_attachment=True, download_name="output.pdf")
+
+
+@app.route("/thumb/<job_id>/<int:page_index>")
+def serve_thumb(job_id, page_index):
+    thumb_dir = os.path.join(DIR_OUTPUT, job_id + "_thumbs")
+    filename = f"{page_index}.jpg"
+    path = os.path.join(thumb_dir, filename)
+    if not os.path.exists(path):
+        return "not found", 404
+    return send_file(path, mimetype="image/jpeg")
 
 
 if __name__ == "__main__":
