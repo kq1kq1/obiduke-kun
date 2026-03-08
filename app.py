@@ -257,7 +257,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
     if DEBUG_DETECT:
         print(f"[page-info] page={page_index} orient={orient} size=({w}x{h})")
 
-    height_min = 0.05
+    height_min = 0.04  # 0.05→0.04: メルディアなど細い帯(hr≈4%)対応
     height_max = 0.18
     step_height = 0.01
 
