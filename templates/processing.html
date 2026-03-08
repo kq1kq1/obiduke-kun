@@ -73,7 +73,7 @@
 
     async function tick() {
       try {
-        const res = await fetch("/progress", { cache: "no-store" });
+        const res = await fetch(`/progress?job_id=${jobId}`, { cache: "no-store" });
         if (!res.ok) throw new Error(`progress fetch failed: ${res.status}`);
         const p = await res.json();
         if (p.job_id && jobId && p.job_id !== jobId) return;

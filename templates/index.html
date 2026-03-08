@@ -8,11 +8,83 @@
     .own-band-preview { max-height: 48px; max-width: 200px; border: 1px solid #ccc; border-radius: 4px; vertical-align: middle; }
     select { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
     .no-band-warn { color: #b00020; font-size: 13px; }
+
+    /* PDFファイルリスト */
+    #pdf-drop-area {
+      border: 2px dashed #bbb;
+      border-radius: 8px;
+      padding: 18px 20px;
+      background: #fafafa;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      margin-bottom: 10px;
+    }
+    #pdf-drop-area.drag-over {
+      border-color: #555;
+      background: #f0f0f0;
+    }
+    #pdf-drop-area p {
+      margin: 0;
+      color: #888;
+      font-size: 13px;
+      text-align: center;
+      pointer-events: none;
+    }
+
+    #pdf-file-list {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    #pdf-file-list li {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-size: 13px;
+    }
+    #pdf-file-list li .file-icon { font-size: 16px; flex-shrink: 0; }
+    #pdf-file-list li .file-name { flex: 1; word-break: break-all; color: #333; }
+    #pdf-file-list li .file-size { color: #999; font-size: 12px; flex-shrink: 0; }
+    #pdf-file-list li .btn-remove {
+      background: none;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      color: #b00020;
+      font-size: 12px;
+      padding: 2px 8px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    #pdf-file-list li .btn-remove:hover { background: #fff0f0; border-color: #b00020; }
+
+    .pdf-add-btn {
+      display: inline-block;
+      padding: 7px 14px;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      color: #444;
+    }
+    .pdf-add-btn:hover { background: #f5f5f5; }
+
+    #file-count-label {
+      font-size: 13px;
+      color: #555;
+      margin-left: 8px;
+    }
   </style>
 </head>
 <body>
 <h1>帯削除 ＋ 自社帯付け 自動処理</h1>
-
   <section>
     <h2>PDF をアップロードして処理</h2>
     {% with messages = get_flashed_messages() %}
@@ -24,9 +96,7 @@
         </ul>
       {% endif %}
     {% endwith %}
-
-    <form action="/process" method="post" enctype="multipart/form-data">
-
+    <form action="/process" method="post" enctype="multipart/form-data" id="main-form">
       <!-- 自社帯選択 -->
       <div style="margin-bottom: 16px;">
         <label style="font-weight:bold; display:block; margin-bottom:6px;">貼り付ける自社帯</label>
@@ -46,13 +116,30 @@
         {% endif %}
       </div>
 
-      <!-- PDF選択（複数可） -->
-      <div style="margin-bottom: 12px;">
-        <label style="font-weight:bold; display:block; margin-bottom:6px;">処理するPDF（複数選択可）</label>
-        <input type="file" name="pdf_file" accept="application/pdf" multiple required>
+      <!-- PDF選択（追加・削除対応） -->
+      <div style="margin-bottom: 16px;">
+        <label style="font-weight:bold; display:block; margin-bottom:8px;">処理するPDF</label>
+
+        <!-- ドロップエリア -->
+        <div id="pdf-drop-area" onclick="triggerFileInput()">
+          <p>📄 ここにPDFをドラッグ＆ドロップ<br>またはクリックしてファイルを選択</p>
+        </div>
+
+        <!-- ファイル一覧 -->
+        <ul id="pdf-file-list"></ul>
+
+        <!-- 追加ボタン + 件数表示 -->
+        <div style="display:flex; align-items:center; gap:0;">
+          <button type="button" class="pdf-add-btn" onclick="triggerFileInput()">＋ PDFを追加</button>
+          <span id="file-count-label">0件選択中</span>
+        </div>
+
+        <!-- 実際のfile input（非表示） -->
+        <input type="file" id="pdf-input" name="pdf_file" accept="application/pdf" multiple
+               style="display:none" onchange="onFileInputChange(this)">
       </div>
 
-      <button type="submit" {% if not own_bands %}disabled{% endif %}>処理開始</button>
+      <button type="submit" id="submit-btn" {% if not own_bands %}disabled{% endif %} disabled>処理開始</button>
     </form>
   </section>
 
@@ -85,10 +172,126 @@
   </section>
 
 <script>
+  // 選択されたFileオブジェクトを管理するリスト
+  let selectedFiles = [];
+
   function updateBandPreview(select) {
     const name = select.value;
     document.getElementById('own-band-preview').src = '/own_bands/' + encodeURIComponent(name);
   }
+
+  function triggerFileInput() {
+    // 毎回valueをリセットして同じファイルも再選択できるようにする
+    const input = document.getElementById('pdf-input');
+    input.value = '';
+    input.click();
+  }
+
+  function onFileInputChange(input) {
+    const newFiles = Array.from(input.files);
+    addFiles(newFiles);
+  }
+
+  function addFiles(newFiles) {
+    newFiles.forEach(file => {
+      // 同名ファイルの重複を防ぐ
+      const exists = selectedFiles.some(f => f.name === file.name && f.size === file.size);
+      if (!exists) selectedFiles.push(file);
+    });
+    renderFileList();
+  }
+
+  function removeFile(index) {
+    selectedFiles.splice(index, 1);
+    renderFileList();
+  }
+
+  function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function renderFileList() {
+    const ul = document.getElementById('pdf-file-list');
+    const countLabel = document.getElementById('file-count-label');
+    const submitBtn = document.getElementById('submit-btn');
+
+    ul.innerHTML = '';
+    selectedFiles.forEach((file, i) => {
+      const li = document.createElement('li');
+      li.innerHTML = `
+        <span class="file-icon">📄</span>
+        <span class="file-name">${file.name}</span>
+        <span class="file-size">${formatSize(file.size)}</span>
+        <button type="button" class="btn-remove" onclick="removeFile(${i})">削除</button>
+      `;
+      ul.appendChild(li);
+    });
+
+    countLabel.textContent = selectedFiles.length > 0 ? `${selectedFiles.length}件選択中` : '0件選択中';
+    submitBtn.disabled = selectedFiles.length === 0 {% if not own_bands %}|| true{% endif %};
+  }
+
+  // フォーム送信時にselectedFilesをDataTransferでinputに反映
+  document.getElementById('main-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+
+    if (selectedFiles.length === 0) {
+      alert('PDFを1件以上選択してください');
+      return;
+    }
+
+    // FormDataで送信（DataTransfer不要・確実な方法）
+    const form = document.getElementById('main-form');
+    const fd = new FormData();
+
+    // own_band
+    const ownBandSelect = document.getElementById('own-band-select');
+    if (ownBandSelect) fd.append('own_band', ownBandSelect.value);
+
+    // 全PDFファイルを同じキー名で追加
+    selectedFiles.forEach(f => fd.append('pdf_file', f));
+
+    // 送信ボタンを無効化してprocessingページへ遷移
+    const btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    btn.textContent = '送信中...';
+
+    fetch('/process', { method: 'POST', body: fd })
+      .then(res => res.json())
+      .then(data => {
+        // job_idを受け取ったら即座にprocessing画面へ遷移
+        if (data.job_id) {
+          window.location.href = data.redirect;
+        } else {
+          alert('エラー: ' + (data.error || '不明なエラー'));
+          btn.disabled = false;
+          btn.textContent = '処理開始';
+        }
+      })
+      .catch(err => {
+        alert('送信エラー: ' + err);
+        btn.disabled = false;
+        btn.textContent = '処理開始';
+      });
+  });
+
+  // ドラッグ＆ドロップ
+  const dropArea = document.getElementById('pdf-drop-area');
+
+  dropArea.addEventListener('dragover', e => {
+    e.preventDefault();
+    dropArea.classList.add('drag-over');
+  });
+  dropArea.addEventListener('dragleave', () => dropArea.classList.remove('drag-over'));
+  dropArea.addEventListener('drop', e => {
+    e.preventDefault();
+    dropArea.classList.remove('drag-over');
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
+    if (files.length === 0) return;
+    addFiles(files);
+  });
 </script>
 </body>
 </html>

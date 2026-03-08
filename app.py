@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional, List
 from threading import Thread, Lock
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from flask import (
     Flask,
@@ -28,10 +29,8 @@ from skimage.metrics import structural_similarity as ssim
 # 設定
 # ============================================
 
-DEBUG_DETECT = True
-
 BLUR_RADIUS = 3
-MAX_PX = 1600  # 2200→1600: 処理速度約2倍・出力PDFサイズ約半分
+MAX_PX = 1200  # 2200→1600: 処理速度約2倍・出力PDFサイズ約半分
 
 
 @dataclass
@@ -232,6 +231,16 @@ class BandTemplate:
         self.color = color  # カラーraw（ぼかしなし、_colorテンプレのみ）
         self.is_color = color is not None
         self.h, self.w = gray.shape
+        # アスペクト比から縦長/横長ページどちらのテンプレか推定
+        # テンプレ自体は帯なので横長（w >> h）。ページ向きとは無関係に同じ幅で使う。
+        # hr（高さ比率）をキャッシュしておく（ページサイズが変わるので動的計算は別途）
+        self.aspect = self.w / max(self.h, 1)  # 大きいほど横に細い帯
+
+
+# リサイズキャッシュ: テンプレ×ウィンドウサイズ → リサイズ済み配列
+# db.load()時にクリアされる（並列処理対応のためロック付き）
+_resized_cache: dict[tuple, np.ndarray] = {}
+_resized_cache_lock = Lock()
 
 
 class TemplateDB:
@@ -241,6 +250,7 @@ class TemplateDB:
 
     def load(self):
         self.items.clear()
+        _resized_cache.clear()  # テンプレ更新時にキャッシュをリセット
 
         files = [
             f for f in os.listdir(DIR_TEMPLATES)
@@ -248,8 +258,16 @@ class TemplateDB:
         ]
 
         # ヒット頻度順にソート（多い順）
+        # counts値はdict形式{"count":N,"best_ssim":X}またはint(旧形式)の両方に対応
         counts = load_hit_counts()
-        files.sort(key=lambda f: counts.get(f, 0), reverse=True)
+
+        def get_count(f):
+            v = counts.get(f, 0)
+            if isinstance(v, dict):
+                return v.get("count", 0)
+            return int(v) if isinstance(v, (int, float)) else 0
+
+        files.sort(key=get_count, reverse=True)
 
         for f in files:
             path = os.path.join(DIR_TEMPLATES, f)
@@ -260,11 +278,8 @@ class TemplateDB:
                 color = None
             self.items.append(BandTemplate(f, gray, color))
 
-        if DEBUG_DETECT:
-            print(f"[debug] loaded templates: {len(self.items)}")
-            color_count = sum(1 for t in self.items if t.is_color)
-            if color_count:
-                print(f"[debug] color templates: {color_count}")
+        color_count = sum(1 for t in self.items if t.is_color)
+        print(f"[templates] loaded={len(self.items)} color={color_count}")
 
 
 db = TemplateDB()
@@ -279,9 +294,6 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
     h, w = gray_blurred.shape
     orient = "landscape" if w >= h else "portrait"
 
-    if DEBUG_DETECT:
-        print(f"[page-info] page={page_index} orient={orient} size=({w}x{h})")
-
     height_min = 0.04  # 0.05→0.04: メルディアなど細い帯(hr≈4%)対応
     height_max = 0.18
     step_height = 0.01
@@ -292,7 +304,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
         height_ratios.append(r)
         r += step_height
 
-    resized_cache: dict[tuple, np.ndarray] = {}
+    # resized_cache はグローバルのものを使用（テンプレ変更時はdb.load()でクリア）
     mse_prefilter = float(getattr(config, "mse_threshold", 0.06)) * float(
         getattr(config, "mse_prefilter_multiplier", 1.7))
     hr_margin = float(getattr(config, "hr_filter_margin", 0.015))
@@ -302,9 +314,9 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
 
     def build_candidate_windows(
             mode: str,
-            offset_step_landscape: float = 0.01,  # 0.02→0.01: ±11px→±5px精度
-            bottom_step_portrait: float = 0.02,
-            center_step_portrait: float = 0.005,  # 0.01→0.005: ±5px精度
+            offset_step_landscape: float = 0.015,  # landscape位置ステップ
+            bottom_step_portrait: float = 0.005,
+            center_step_portrait: float = 0.005,  # 0.005: 真ん中帯の検出精度確保
     ) -> list[tuple[int, int]]:
         candidate_windows: list[tuple[int, int]] = []
 
@@ -313,8 +325,9 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
                 win_h = int(h * hr)
                 if win_h < 8:
                     continue
+                # 下部25%のみスキャン（下端からoffset 0〜0.25）
                 offset = 0.0
-                while offset <= 0.20 + 1e-6:
+                while offset <= 0.25 + 1e-6:
                     y1 = h - int(offset * h)
                     y0 = y1 - win_h
                     if y0 < 0 or y1 > h:
@@ -339,8 +352,8 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
                         offset += bottom_step_portrait
 
                 if mode in ("all", "center"):
-                    center_ratio = 0.35
-                    while center_ratio <= 0.75 + 1e-6:
+                    center_ratio = 0.38
+                    while center_ratio <= 0.52 + 1e-6:
                         center = int(h * center_ratio)
                         y0 = center - win_h // 2
                         y1 = y0 + win_h
@@ -377,18 +390,26 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
             return None, None
 
         key = (id(tmpl), target_h, target_w, use_color)
-        resized = resized_cache.get(key)
+        with _resized_cache_lock:
+            resized = _resized_cache.get(key)
         if resized is None:
             if use_color:
                 resized = resize_color(tmpl.color, target_h, target_w)
             else:
                 resized = resize_gray(tmpl.gray, target_h, target_w)
-            resized_cache[key] = resized
+            with _resized_cache_lock:
+                _resized_cache[key] = resized
 
         v_offset = (region_h - target_h) // 2
         patch = region[v_offset:v_offset + target_h, :]
 
         return patch, resized
+
+    # テンプレごとの expected_hr を事前計算（スキャンのたびに再計算しない）
+    tmpl_expected_hr = {}
+    for _t in db.items:
+        _scale = w / float(_t.w)
+        tmpl_expected_hr[id(_t)] = (_t.h * _scale) / h
 
     def scan(candidate_windows: list[tuple[int, int]]):
         nonlocal best_any
@@ -401,8 +422,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
 
             for tmpl in db.items:
                 # ★ hrフィルタ: テンプレの期待高さ比率から外れたウィンドウをスキップ
-                scale_to_page = w / float(tmpl.w)
-                expected_hr = (tmpl.h * scale_to_page) / h
+                expected_hr = tmpl_expected_hr[id(tmpl)]
                 if abs(win_hr - expected_hr) > hr_margin:
                     skipped_hr += 1
                     continue
@@ -430,10 +450,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
                         continue
                     m1 = mse(patch, resized)
                     s1 = ssim(patch, resized, data_range=1.0, channel_axis=2)
-                    if DEBUG_DETECT:
-                        print(
-                            f"[color-ssim] win=({y0},{y1}) s1={s1:.3f} mse={m1:.4f}"
-                        )
+
                 else:
                     s1 = ssim(gray_patch, gray_resized, data_range=1.0)
                     m1 = m_gray
@@ -451,23 +468,17 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
                 dyn_thresh = get_dynamic_threshold(tmpl.name,
                                                    config.ssim_threshold)
                 if s1 >= dyn_thresh and m1 <= config.mse_threshold:
-                    if DEBUG_DETECT:
-                        print(
-                            f"[scan] page={page_index} mse_pass={mse_pass_count} "
-                            f"HIT ssim={s1:.3f} dyn_thresh={dyn_thresh:.3f} tmpl={tmpl.name}"
-                        )
+                    print(
+                        f"[scan] page={page_index} HIT ssim={s1:.3f} thresh={dyn_thresh:.3f} tmpl={tmpl.name}"
+                    )
                     return (s1, m1, orient, 0, gy0, region_w_global, gy1, tmpl)
 
                 if s1 >= 0.92:
-                    if DEBUG_DETECT:
-                        print(
-                            f"[scan] page={page_index} mse_pass={mse_pass_count} "
-                            f"HIT ssim={s1:.3f} tmpl={tmpl.name}")
+                    print(
+                        f"[scan] page={page_index} HIT ssim={s1:.3f} tmpl={tmpl.name}"
+                    )
                     return (s1, m1, orient, 0, gy0, region_w_global, gy1, tmpl)
 
-        if DEBUG_DETECT:
-            print(f"[scan] page={page_index} mse_pass={mse_pass_count} "
-                  f"skipped_hr={skipped_hr} no_hit")
         return None
 
     def scan_single_tmpl(candidate_windows: list[tuple[int, int]], tmpl):
@@ -477,9 +488,8 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
             win_h = y1 - y0
             win_hr = win_h / h
 
-            # hrフィルタ
-            scale_to_page = w / float(tmpl.w)
-            expected_hr = (tmpl.h * scale_to_page) / h
+            # hrフィルタ（事前計算済みを使用）
+            expected_hr = tmpl_expected_hr[id(tmpl)]
             if abs(win_hr - expected_hr) > hr_margin:
                 continue
 
@@ -540,10 +550,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
 
         else:
             center_windows = build_candidate_windows("center")
-            if DEBUG_DETECT:
-                print(
-                    f"[center-scan] page={page_index} windows={len(center_windows)} "
-                    f"mse_prefilter={mse_prefilter:.4f}")
+
             hit_center = scan(center_windows)
             if hit_center is not None:
                 s_hit2, m_hit2, o2, x02, y02, x12, y12, hit_tmpl2 = hit_center
@@ -558,19 +565,13 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
             results.append((o, x0, y0, x1, y1))
             increment_hit_count(hit_tmpl.name, s_hit3)
 
-    if DEBUG_DETECT and best_any is not None:
-        s_best, m_best, _, bx0, by0, bx1, by1 = best_any
-        print(f"[detect-best] page={page_index} "
-              f"best_ssim={s_best:.3f} best_mse={m_best:.4f} "
-              f"rect=({bx0},{by0})-({bx1},{by1})")
-
-    if DEBUG_DETECT:
-        if not results:
-            print(f"[detect] page={page_index} NO band detected")
-        else:
-            for (o, x0, y0, x1, y1) in results:
-                print(f"[detect] page={page_index} HIT orient={o} "
-                      f"rect=({x0},{y0})-({x1},{y1})")
+    if not results:
+        print(f"[detect] page={page_index} NO band detected")
+    else:
+        for (o, x0, y0, x1, y1) in results:
+            print(
+                f"[detect] page={page_index} HIT orient={o} rect=({x0},{y0})-({x1},{y1})"
+            )
 
     return results
 
@@ -613,60 +614,94 @@ def apply_band(page_img, det, own_band_path):
 # ============================================
 
 
-def process_pdf_single(input_path, own_band_path, page_offset=0):
-    doc = fitz.open(input_path)
-    pages_out = []
-    missed = []
-    page_results = []  # 各ページの検出結果メタデータ
+def process_single_page(img, own_band_path, abs_idx, job_id=None):
+    """1ページ分の検出・帯付けを行う（並列処理用）"""
+    g_blurred = to_gray_blurred(img)
+    c_blurred = to_color_blurred(img)
+    dets = detect_band(g_blurred, c_blurred, page_index=abs_idx + 1)
 
+    orig_img = img.copy()
+
+    if dets:
+        det_info = []
+        for det in dets:
+            img = apply_band(img, det, own_band_path)
+            _o, _x0, _y0, _x1, _y1 = det
+            det_info.append({
+                "x0": _x0,
+                "y0": _y0,
+                "x1": _x1,
+                "y1": _y1,
+                "tmpl_name": ""
+            })
+        page_result = {
+            "page_index": abs_idx,
+            "page_label": f"{abs_idx + 1}ページ目",
+            "missed": False,
+            "detections": det_info,
+        }
+        missed_entry = None
+    else:
+        missed_entry = {
+            "page_index": abs_idx,
+            "page_label": f"{abs_idx + 1}ページ目"
+        }
+        page_result = {
+            "page_index": abs_idx,
+            "page_label": f"{abs_idx + 1}ページ目",
+            "missed": True,
+            "detections": [],
+        }
+
+    # 進捗更新（job_idが渡された場合）
+    if job_id:
+        with progress_lock:
+            if job_id in all_progress:
+                all_progress[job_id]["current"] += 1
+
+    return abs_idx, img, orig_img, missed_entry, page_result
+
+
+def process_pdf_single(input_path, own_band_path, page_offset=0, job_id=None):
+    doc = fitz.open(input_path)
+
+    # 先にPDFから全ページ画像をメモリに展開（fitz操作はスレッドセーフでないため直列）
+    page_imgs = []
     for i, page in enumerate(doc):
         rect = page.rect
         scale = min(MAX_PX / rect.width, MAX_PX / rect.height)
-
         pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        page_imgs.append((page_offset + i, img))
+    doc.close()
 
-        g_blurred = to_gray_blurred(img)
-        c_blurred = to_color_blurred(img)
-        dets = detect_band(g_blurred, c_blurred, page_index=i + 1)
+    # 並列で各ページを処理
+    MAX_WORKERS = min(4, len(page_imgs))
+    results = [None] * len(page_imgs)
 
-        abs_idx = page_offset + i
-        if dets:
-            det_info = []
-            for det in dets:
-                img = apply_band(img, det, own_band_path)
-                _o, _x0, _y0, _x1, _y1 = det
-                det_info.append({
-                    "x0": _x0,
-                    "y0": _y0,
-                    "x1": _x1,
-                    "y1": _y1,
-                    "tmpl_name": "",
-                })
-            page_results.append({
-                "page_index": abs_idx,
-                "page_label": f"{abs_idx + 1}ページ目",
-                "missed": False,
-                "detections": det_info,
-            })
-        else:
-            missed.append({
-                "page_index": abs_idx,
-                "page_label": f"{abs_idx + 1}ページ目",
-            })
-            page_results.append({
-                "page_index": abs_idx,
-                "page_label": f"{abs_idx + 1}ページ目",
-                "missed": True,
-                "detections": [],
-            })
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {
+            executor.submit(process_single_page, img, own_band_path, abs_idx, job_id):
+            local_i
+            for local_i, (abs_idx, img) in enumerate(page_imgs)
+        }
+        for future in as_completed(futures):
+            local_i = futures[future]
+            results[local_i] = future.result()
 
-        with progress_lock:
-            progress["current"] += 1
+    pages_out = []
+    orig_pages_out = []
+    missed = []
+    page_results = []
 
+    for abs_idx, img, orig_img, missed_entry, page_result in results:
         pages_out.append(img)
+        orig_pages_out.append(orig_img)
+        if missed_entry:
+            missed.append(missed_entry)
+        page_results.append(page_result)
 
-    return pages_out, missed, page_results
+    return pages_out, orig_pages_out, missed, page_results
 
 
 # ============================================
@@ -677,15 +712,18 @@ app = Flask(__name__)
 app.secret_key = "secretkey"
 
 progress_lock = Lock()
-progress = {
-    "status": "idle",
-    "current": 0,
-    "total": 0,
-    "job_id": None,
-    "error": None,
-    "download": None,
-    "missed_pages": [],
-}
+# job_idをキーにした進捗管理（複数人同時処理対応）
+all_progress: dict[str, dict] = {}
+
+
+def make_progress_entry():
+    return {
+        "status": "idle",
+        "current": 0,
+        "total": 0,
+        "error": None,
+        "missed_pages": [],
+    }
 
 
 def render_page_to_pil(doc,
@@ -898,36 +936,39 @@ def handle_pdf():
         pdf.save(in_path)
         in_paths.append(in_path)
 
-    total_pages = 0
-    for p in in_paths:
-        try:
-            doc = fitz.open(p)
-            total_pages += len(doc)
-            doc.close()
-        except Exception:
-            pass
-
+    # ページ数カウントの前にprogress登録→即座にレスポンスを返せるようにする
     with progress_lock:
-        progress["status"] = "running"
-        progress["current"] = 0
-        progress["total"] = total_pages
-        progress["job_id"] = job_id
-        progress["error"] = None
-        progress["download"] = None
-        progress["missed_pages"] = []
+        all_progress[job_id] = make_progress_entry()
+        all_progress[job_id]["status"] = "running"
+        all_progress[job_id]["total"] = 0  # worker内で更新
 
     def worker():
         try:
             db.load()
+
+            # ページ数をworker内でカウントしてtotalを更新
+            total_pages = 0
+            for p in in_paths:
+                try:
+                    doc = fitz.open(p)
+                    total_pages += len(doc)
+                    doc.close()
+                except Exception:
+                    pass
+            with progress_lock:
+                all_progress[job_id]["total"] = total_pages
+
             all_pages = []
+            all_orig_pages = []
             all_missed = []
             all_page_results = []
             page_offset = 0
 
             for in_path in in_paths:
-                pages, missed, page_results = process_pdf_single(
-                    in_path, own_band_path, page_offset)
+                pages, orig_pages, missed, page_results = process_pdf_single(
+                    in_path, own_band_path, page_offset, job_id=job_id)
                 all_pages.extend(pages)
+                all_orig_pages.extend(orig_pages)
                 all_missed.extend(missed)
                 all_page_results.extend(page_results)
                 page_offset += len(pages)
@@ -935,11 +976,13 @@ def handle_pdf():
             if not all_pages:
                 raise Exception("処理結果が空です")
 
-            # 全ページ画像を保存（フルサイズ・サムネイル）
+            # 全ページ画像を保存（フルサイズ・サムネイル・元画像）
             pages_dir = os.path.join(DIR_OUTPUT, job_id + "_pages")
             thumb_dir = os.path.join(DIR_OUTPUT, job_id + "_thumbs")
+            orig_dir = os.path.join(DIR_OUTPUT, job_id + "_orig")
             os.makedirs(pages_dir, exist_ok=True)
             os.makedirs(thumb_dir, exist_ok=True)
+            os.makedirs(orig_dir, exist_ok=True)
 
             for idx, img in enumerate(all_pages):
                 img.save(os.path.join(pages_dir, f"page_{idx}.jpg"),
@@ -949,24 +992,29 @@ def handle_pdf():
                 thumb.save(os.path.join(thumb_dir, f"page_{idx}.jpg"),
                            quality=85)
 
+            for idx, orig in enumerate(all_orig_pages):
+                orig.save(os.path.join(orig_dir, f"page_{idx}.jpg"),
+                          quality=90)
+
             # メタデータ保存
             meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(all_page_results, f, ensure_ascii=False)
 
             with progress_lock:
-                progress["status"] = "done"
-                progress["job_id"] = job_id
-                progress["missed_pages"] = all_missed
+                all_progress[job_id]["status"] = "done"
+                all_progress[job_id]["missed_pages"] = all_missed
 
         except Exception as e:
             with progress_lock:
-                progress["status"] = "error"
-                progress["error"] = str(e)
+                if job_id in all_progress:
+                    all_progress[job_id]["status"] = "error"
+                    all_progress[job_id]["error"] = str(e)
 
     Thread(target=worker, daemon=True).start()
 
-    return render_template("processing.html", job_id=job_id)
+    # job_idを即座に返す（フロント側でprocessing画面に遷移）
+    return jsonify({"job_id": job_id, "redirect": f"/processing/{job_id}"})
 
 
 @app.route("/bands")
@@ -1137,17 +1185,34 @@ def toggle_color_band():
 
 @app.route("/progress")
 def get_progress():
+    from flask import request as freq
+    job_id = freq.args.get("job_id")
     with progress_lock:
-        job_id = progress["job_id"]
+        p = all_progress.get(job_id)
+    if not p:
         return {
-            "status": progress["status"],
-            "current": progress["current"],
-            "total": progress["total"],
+            "status": "not_found",
+            "current": 0,
+            "total": 0,
             "job_id": job_id,
-            "error": progress["error"],
-            "missed_pages": progress.get("missed_pages", []),
-            "review_url": f"/review/{job_id}" if job_id else None,
+            "error": "job not found",
+            "missed_pages": [],
+            "review_url": None
         }
+    return {
+        "status": p["status"],
+        "current": p["current"],
+        "total": p["total"],
+        "job_id": job_id,
+        "error": p.get("error"),
+        "missed_pages": p.get("missed_pages", []),
+        "review_url": f"/review/{job_id}" if p["status"] == "done" else None,
+    }
+
+
+@app.route("/processing/<job_id>")
+def processing_page(job_id):
+    return render_template("processing.html", job_id=job_id)
 
 
 @app.route("/review/<job_id>")
@@ -1247,17 +1312,18 @@ def save_band_from_review():
     tmpl_name = (data.get("template_name") or "band_template").strip()
     use_color = bool(data.get("use_color", False))
 
+    # 元画像（帯付け前）から切り出す。なければ処理済み画像にフォールバック
+    orig_dir = os.path.join(DIR_OUTPUT, job_id + "_orig")
     pages_dir = os.path.join(DIR_OUTPUT, job_id + "_pages")
+    orig_path = os.path.join(orig_dir, f"page_{page_index}.jpg")
     page_path = os.path.join(pages_dir, f"page_{page_index}.jpg")
-    if not os.path.exists(page_path):
+
+    src_path = orig_path if os.path.exists(orig_path) else page_path
+    if not os.path.exists(src_path):
         return jsonify({"ok": False, "error": "page not found"}), 404
 
     try:
-        # 手動帯付け済みページ画像から帯部分を切り出す
-        # ※ページ画像はapply_band後なので帯が貼られた状態
-        # 元の（帯付け前の）画像を復元できないため、
-        # y0/y1範囲をそのままcropして保存
-        img = Image.open(page_path).convert("RGB")
+        img = Image.open(src_path).convert("RGB")
         w, h = img.size
         y0 = max(0, int(y0_ratio * h))
         y1 = min(h, int(y1_ratio * h))
