@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>帯付け確認・修正 — 帯付けくん</title>
+<style>
+  :root {
+    --bg: #f0ede8;
+    --surface: #faf8f5;
+    --border: #d8d3cc;
+    --text: #1a1714;
+    --text-muted: #7a746c;
+    --accent: #c84b2f;
+    --ok: #2a7a4f;
+    --ok-light: #e5f2ec;
+    --miss: #c84b2f;
+    --miss-light: #fdf0ee;
+    --shadow: 0 2px 12px rgba(0,0,0,0.08);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    font-family: 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif;
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  header {
+    background: var(--text);
+    color: #fff;
+    padding: 14px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  }
+  .logo { font-size: 1.05rem; font-weight: 700; letter-spacing: 0.05em; opacity: 0.9; }
+  .header-right { display: flex; align-items: center; gap: 14px; }
+  .stat-badge {
+    font-size: 0.76rem; padding: 4px 10px; border-radius: 20px; font-weight: 700;
+  }
+  .stat-miss { background: var(--miss); color: #fff; }
+  .stat-ok { background: var(--ok); color: #fff; }
+  .btn-download {
+    background: #e8a020; color: #fff; border: none;
+    padding: 10px 22px; border-radius: 6px; font-size: 0.9rem; font-weight: 700;
+    cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+    transition: background 0.15s;
+  }
+  .btn-download:hover { background: #c88010; }
+  .btn-back-top {
+    color: #ccc; font-size: 0.82rem; text-decoration: none;
+    padding: 4px 2px; transition: color 0.15s;
+  }
+  .btn-back-top:hover { color: #fff; }
+
+  main { max-width: 1300px; margin: 0 auto; padding: 28px 24px; }
+
+  .section-title {
+    font-size: 0.76rem; font-weight: 700; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--text-muted); margin-bottom: 14px;
+  }
+
+  .section-missed {
+    background: var(--miss-light); border: 1.5px solid #f0c4bc;
+    border-radius: 10px; padding: 20px 24px; margin-bottom: 32px;
+  }
+  .section-missed .section-title { color: var(--miss); }
+  .section-ok {
+    background: var(--surface); border: 1.5px solid var(--border);
+    border-radius: 10px; padding: 20px 24px; margin-bottom: 32px;
+  }
+
+  .thumb-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .thumb-card {
+    background: #fff; border-radius: 8px; overflow: hidden;
+    box-shadow: var(--shadow); cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    border: 2.5px solid transparent; position: relative;
+    /* 縦長=150px幅、横長=220px幅 → img読み込み後JSで設定 */
+    width: 150px;
+    flex-shrink: 0;
+  }
+  .thumb-card.landscape { width: 220px; }
+  .thumb-card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.14); }
+  .thumb-card.missed { border-color: var(--miss); }
+  .thumb-card.ok { border-color: #b8d8c4; }
+  .thumb-card.manually-done { border-color: var(--ok); }
+
+  .thumb-img-wrap {
+    position: relative; width: 100%;
+    background: #eee; overflow: hidden;
+  }
+  .thumb-img-wrap img { width: 100%; height: auto; display: block; }
+
+  .thumb-status {
+    position: absolute; top: 6px; right: 6px;
+    font-size: 0.66rem; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+  }
+  .status-miss { background: var(--miss); color: #fff; }
+  .status-ok { background: var(--ok); color: #fff; }
+  .status-manual { background: #2255cc; color: #fff; }
+
+  .thumb-label {
+    padding: 6px 8px; font-size: 0.76rem; color: var(--text-muted);
+    text-align: center; font-weight: 500;
+  }
+  .thumb-card.missed .thumb-label { color: var(--miss); font-weight: 700; }
+
+  .all-ok-banner {
+    background: var(--ok-light); border: 1.5px solid #b0d8c0;
+    border-radius: 8px; padding: 18px 24px; color: var(--ok);
+    font-weight: 700; font-size: 0.92rem; margin-bottom: 24px;
+  }
+
+  /* Modal */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(10,8,6,0.80); z-index: 200;
+    align-items: center; justify-content: center; padding: 16px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-box {
+    background: var(--surface); border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    max-width: 900px; width: 100%; max-height: 94vh;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .modal-header {
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .modal-header h2 { font-size: 0.98rem; font-weight: 700; }
+  .modal-close {
+    background: none; border: none; font-size: 1.4rem; cursor: pointer;
+    color: var(--text-muted); padding: 2px 6px; line-height: 1;
+  }
+  .modal-close:hover { color: var(--text); }
+
+  .modal-body { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+
+  .modal-canvas-area {
+    flex: 1; min-width: 0; overflow: auto; padding: 16px;
+    background: #ccc; display: flex; align-items: flex-start; justify-content: center;
+  }
+  #page-canvas-wrap {
+    position: relative; display: inline-block; line-height: 0; user-select: none;
+  }
+  #page-canvas-wrap img {
+    display: block; max-width: 100%; max-height: calc(94vh - 170px); object-fit: contain;
+  }
+
+  /* 帯選択オーバーレイ */
+  #sel-overlay {
+    position: absolute; left: 0; right: 0; pointer-events: none;
+    border-top: 3px solid #e8a020; border-bottom: 3px solid #e8a020;
+    background: rgba(232,160,32,0.2); display: none;
+  }
+
+  .modal-panel {
+    width: 210px; flex-shrink: 0; border-left: 1px solid var(--border);
+    padding: 18px 14px; display: flex; flex-direction: column; gap: 16px;
+    overflow-y: auto; background: var(--surface);
+  }
+  .panel-label {
+    font-size: 0.73rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px;
+  }
+  .instruction-box {
+    background: #fff8e5; border: 1px solid #eed86a; border-radius: 6px;
+    padding: 10px 12px; font-size: 0.78rem; line-height: 1.75; color: #7a6820;
+  }
+  .range-display {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 12px; font-size: 0.82rem; line-height: 1.7;
+    font-variant-numeric: tabular-nums;
+  }
+  .range-display .muted { color: var(--text-muted); font-size: 0.74rem; }
+
+  .btn-apply {
+    background: var(--ok); color: #fff; border: none;
+    padding: 12px 14px; border-radius: 7px; font-size: 0.88rem; font-weight: 700;
+    cursor: pointer; width: 100%; transition: background 0.15s;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .btn-apply:hover:not(:disabled) { background: #1d6040; }
+  .btn-apply:disabled { background: #aaa; cursor: not-allowed; }
+  .btn-cancel-modal {
+    background: none; color: var(--text-muted); border: 1.5px solid var(--border);
+    padding: 9px 14px; border-radius: 7px; font-size: 0.83rem; font-weight: 600;
+    cursor: pointer; width: 100%; transition: all 0.15s;
+  }
+  .btn-cancel-modal:hover { color: var(--text); }
+
+  .apply-result {
+    font-size: 0.78rem; padding: 8px 10px; border-radius: 5px;
+    text-align: center; display: none;
+  }
+  .apply-result.ok  { background: var(--ok-light); color: var(--ok); }
+  .apply-result.err { background: var(--miss-light); color: var(--miss); }
+
+  /* テンプレ登録UI */
+  .register-box {
+    display: none;
+    background: #f0f4ff; border: 1.5px solid #9ab0e8;
+    border-radius: 8px; padding: 12px;
+    flex-direction: column; gap: 8px;
+  }
+  .register-box.open { display: flex; }
+  .register-box .reg-label {
+    font-size: 0.73rem; font-weight: 700; color: #334488;
+    letter-spacing: 0.05em;
+  }
+  .register-box input[type=text] {
+    width: 100%; padding: 7px 9px; border: 1px solid #c0cce8;
+    border-radius: 5px; font-size: 0.82rem; outline: none;
+    font-family: inherit;
+  }
+  .register-box input:focus { border-color: #6688cc; }
+  .reg-color-row {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 0.76rem; color: #334488;
+  }
+  .btn-register {
+    background: #3355bb; color: #fff; border: none;
+    padding: 9px 12px; border-radius: 6px; font-size: 0.84rem;
+    font-weight: 700; cursor: pointer; width: 100%;
+    transition: background 0.15s;
+  }
+  .btn-register:hover:not(:disabled) { background: #2244aa; }
+  .btn-register:disabled { background: #aaa; cursor: not-allowed; }
+  .btn-skip-reg {
+    background: none; border: none; color: #7a8aaa;
+    font-size: 0.76rem; cursor: pointer; text-decoration: underline;
+    text-align: center; padding: 2px;
+  }
+  .reg-result {
+    font-size: 0.76rem; padding: 6px 8px; border-radius: 4px;
+    text-align: center; display: none;
+  }
+  .reg-result.ok  { background: #ddeeff; color: #224488; }
+  .reg-result.err { background: var(--miss-light); color: var(--miss); }
+
+  .spinner {
+    width: 15px; height: 15px;
+    border: 2.5px solid rgba(255,255,255,0.4); border-top-color: #fff;
+    border-radius: 50%; animation: spin 0.6s linear infinite; display: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="logo">帯付けくん — 確認・修正</span>
+  <div class="header-right">
+    <span class="stat-badge stat-miss" id="hdr-miss">未検出 {{ missed_pages|length }}ページ</span>
+    <span class="stat-badge stat-ok" id="hdr-ok">検出済 {{ ok_pages|length }}ページ</span>
+    <a href="/download/{{ job_id }}" class="btn-download">⬇ PDFをダウンロード</a>
+    <a href="/" class="btn-back-top">◀ トップに戻る</a>
+  </div>
+</header>
+
+<main>
+
+  {% if not missed_pages %}
+  <div class="all-ok-banner">✅ 全ページの帯を自動検出しました。確認してダウンロードしてください。</div>
+  {% else %}
+  <div class="section-missed">
+    <div class="section-title">⚠ 帯未検出 — クリックして手動で帯付けしてください</div>
+    <div class="thumb-grid">
+      {% for p in missed_pages %}
+      <div class="thumb-card missed" id="card-{{ p.page_index }}"
+           onclick="openModal({{ p.page_index }}, '{{ p.page_label }}', true)">
+        <div class="thumb-img-wrap">
+          <img src="/thumb_all/{{ job_id }}/{{ p.page_index }}" id="thumb-{{ p.page_index }}" alt="{{ p.page_label }}"
+               onload="setCardOrientation(this, 'card-{{ p.page_index }}')">
+          <div class="thumb-status status-miss" id="badge-{{ p.page_index }}">未検出</div>
+        </div>
+        <div class="thumb-label" id="label-{{ p.page_index }}">{{ p.page_label }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if ok_pages %}
+  <div class="section-ok">
+    <div class="section-title">✓ 自動検出済みページ（クリックで確認・修正）</div>
+    <div class="thumb-grid">
+      {% for p in ok_pages %}
+      <div class="thumb-card ok" id="card-{{ p.page_index }}"
+           onclick="openModal({{ p.page_index }}, '{{ p.page_label }}', false)">
+        <div class="thumb-img-wrap">
+          <img src="/thumb_all/{{ job_id }}/{{ p.page_index }}" id="thumb-{{ p.page_index }}" alt="{{ p.page_label }}"
+               onload="setCardOrientation(this, 'card-{{ p.page_index }}')">
+          <div class="thumb-status status-ok" id="badge-{{ p.page_index }}">検出済</div>
+        </div>
+        <div class="thumb-label" id="label-{{ p.page_index }}">{{ p.page_label }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+</main>
+
+<div style="text-align:center; padding: 24px 0 40px;">
+  <a href="/" style="display:inline-block; padding:11px 28px; background:#fff; color:#1a1714; border:1.5px solid #d8d3cc; border-radius:8px; font-size:0.88rem; font-weight:600; text-decoration:none; transition:background 0.15s;"
+     onmouseover="this.style.background='#f0ede8'" onmouseout="this.style.background='#fff'">
+    ◀ トップに戻る
+  </a>
+</div>
+
+<!-- モーダル -->
+<div class="modal-overlay" id="modal" onclick="overlayClick(event)">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2 id="modal-title">ページ確認</h2>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-canvas-area" id="canvas-area">
+        <div id="page-canvas-wrap">
+          <img id="modal-img" src="" alt="page" draggable="false">
+          <div id="sel-overlay"></div>
+        </div>
+      </div>
+      <div class="modal-panel">
+        <div>
+          <div class="panel-label">操作方法</div>
+          <div class="instruction-box">
+            画像の上でドラッグして帯の範囲を選択してください。<br><br>
+            黄色い枠が帯位置になります。
+          </div>
+        </div>
+        <div>
+          <div class="panel-label">選択範囲</div>
+          <div class="range-display" id="range-display">
+            <span class="muted">未選択</span>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button class="btn-apply" id="btn-apply" onclick="applyBand()" disabled>
+            <div class="spinner" id="spinner"></div>
+            <span id="btn-text">帯を貼り付け</span>
+          </button>
+          <button class="btn-cancel-modal" onclick="closeModal()">キャンセル</button>
+        </div>
+        <div class="apply-result" id="apply-result"></div>
+
+        <!-- テンプレ登録ボックス（貼り付け成功後に表示） -->
+        <div class="register-box" id="register-box">
+          <div class="reg-label">📋 このテンプレを登録しますか？</div>
+          <input type="text" id="tmpl-name-input" placeholder="会社名（例: アーネストワン）" maxlength="40">
+          <label class="reg-color-row">
+            <input type="checkbox" id="reg-color-check">
+            カラーモードで登録
+          </label>
+          <button class="btn-register" id="btn-register" onclick="saveTemplate()">
+            テンプレとして登録
+          </button>
+          <button class="btn-skip-reg" onclick="skipRegister()">登録しない（このまま閉じる）</button>
+          <div class="reg-result" id="reg-result"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const JOB_ID = "{{ job_id }}";
+let curPage = null, curMissed = false;
+let selY0 = null, selY1 = null;
+let dragging = false, dragStart = null;
+let pendingReg = null;  // 登録待ち情報 {page_index, y0_ratio, y1_ratio}
+
+const modalEl  = document.getElementById('modal');
+const imgEl    = document.getElementById('modal-img');
+const wrap     = document.getElementById('page-canvas-wrap');
+const selOv    = document.getElementById('sel-overlay');
+
+function openModal(idx, label, isMissed) {
+  curPage = idx; curMissed = isMissed;
+  selY0 = selY1 = null;
+  document.getElementById('modal-title').textContent = label + (isMissed ? ' — 手動帯付け' : ' — 確認・修正');
+  imgEl.src = `/page_img/${JOB_ID}/${idx}?t=${Date.now()}`;
+  resetSel();
+  document.getElementById('apply-result').style.display = 'none';
+  modalEl.classList.add('open');
+}
+function closeModal() {
+  modalEl.classList.remove('open');
+  curPage = null; curMissed = false;
+  pendingReg = null;
+  document.getElementById('register-box').classList.remove('open');
+  document.getElementById('reg-result').style.display = 'none';
+  document.getElementById('tmpl-name-input').value = '';
+  document.getElementById('reg-color-check').checked = false;
+}
+function overlayClick(e) { if (e.target === modalEl) closeModal(); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+// ドラッグ
+function imgY(e) {
+  const r = imgEl.getBoundingClientRect();
+  const cy = e.touches ? e.touches[0].clientY : e.clientY;
+  return Math.max(0, Math.min(cy - r.top, r.height));
+}
+
+wrap.addEventListener('mousedown', startDrag);
+wrap.addEventListener('touchstart', startDrag, {passive: false});
+
+function startDrag(e) {
+  e.preventDefault();
+  dragging = true;
+  dragStart = imgY(e);
+  selY0 = selY1 = dragStart;
+  showSel();
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', endDrag);
+  document.addEventListener('touchmove', onMove, {passive:false});
+  document.addEventListener('touchend', endDrag);
+}
+function onMove(e) {
+  if (!dragging) return; e.preventDefault();
+  const y = imgY(e);
+  selY0 = Math.min(dragStart, y);
+  selY1 = Math.max(dragStart, y);
+  showSel();
+}
+function endDrag() {
+  if (!dragging) return; dragging = false;
+  document.removeEventListener('mousemove', onMove);
+  document.removeEventListener('mouseup', endDrag);
+  document.removeEventListener('touchmove', onMove);
+  document.removeEventListener('touchend', endDrag);
+  if (selY1 - selY0 < 5) { resetSel(); return; }
+  updateRange();
+  document.getElementById('btn-apply').disabled = false;
+}
+
+function showSel() {
+  const r = imgEl.getBoundingClientRect();
+  const wR = wrap.getBoundingClientRect();
+  const offTop = r.top - wR.top;
+  selOv.style.display = 'block';
+  selOv.style.top = (offTop + selY0) + 'px';
+  selOv.style.height = (selY1 - selY0) + 'px';
+}
+function resetSel() {
+  selOv.style.display = 'none';
+  selY0 = selY1 = null;
+  document.getElementById('range-display').innerHTML = '<span class="muted">未選択</span>';
+  document.getElementById('btn-apply').disabled = true;
+}
+function updateRange() {
+  const h = imgEl.getBoundingClientRect().height;
+  const r0 = (selY0/h*100).toFixed(1);
+  const r1 = (selY1/h*100).toFixed(1);
+  document.getElementById('range-display').innerHTML =
+    `上端: ${r0}%<br>下端: ${r1}%<br><span class="muted">高さ: ${(r1-r0).toFixed(1)}%</span>`;
+}
+
+// 帯貼り付けAPI
+async function applyBand() {
+  if (selY0 === null || curPage === null) return;
+  const h = imgEl.getBoundingClientRect().height;
+  const y0_ratio = selY0 / h;
+  const y1_ratio = selY1 / h;
+
+  const btn = document.getElementById('btn-apply');
+  const sp  = document.getElementById('spinner');
+  const txt = document.getElementById('btn-text');
+  const res = document.getElementById('apply-result');
+
+  btn.disabled = true; sp.style.display = 'block'; txt.textContent = '処理中...';
+  res.style.display = 'none';
+
+  try {
+    const r = await fetch(`/manual_band/${JOB_ID}/${curPage}`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({y0_ratio, y1_ratio})
+    });
+    const data = await r.json();
+
+    if (data.ok) {
+      const ts = data.ts;
+      const th = document.getElementById(`thumb-${curPage}`);
+      if (th) th.src = `/thumb_all/${JOB_ID}/${curPage}?t=${ts}`;
+      imgEl.src = `/page_img/${JOB_ID}/${curPage}?t=${ts}`;
+      resetSel();
+
+      // カード更新
+      const card = document.getElementById(`card-${curPage}`);
+      if (card) {
+        card.classList.remove('missed'); card.classList.add('manually-done');
+        const badge = document.getElementById(`badge-${curPage}`);
+        if (badge) { badge.className = 'thumb-status status-manual'; badge.textContent = '手動'; }
+        const lbl = document.getElementById(`label-${curPage}`);
+        if (lbl) lbl.style.color = '';
+      }
+      updateCounts();
+
+      sp.style.display = 'none'; txt.textContent = '帯を貼り付け'; btn.disabled = false;
+
+      if (curMissed) {
+        // 未検出ページ → 登録ボックスを表示
+        pendingReg = { page_index: curPage, y0_ratio, y1_ratio };
+        res.className = 'apply-result ok'; res.textContent = '✓ 帯を貼り付けました';
+        res.style.display = 'block';
+        document.getElementById('register-box').classList.add('open');
+        document.getElementById('tmpl-name-input').focus();
+      } else {
+        // 検出済みページの修正 → 即close
+        res.className = 'apply-result ok'; res.textContent = '✓ 修正しました';
+        res.style.display = 'block';
+        setTimeout(() => closeModal(), 300);
+      }
+      return;
+    } else {
+      throw new Error(data.error || 'エラー');
+    }
+  } catch (e) {
+    res.className = 'apply-result err'; res.textContent = '✗ ' + e.message;
+  } finally {
+    res.style.display = 'block';
+    sp.style.display = 'none'; txt.textContent = '帯を貼り付け'; btn.disabled = false;
+  }
+}
+
+function updateCounts() {
+  const miss = document.querySelectorAll('.thumb-card.missed').length;
+  const ok   = document.querySelectorAll('.thumb-card.ok, .thumb-card.manually-done').length;
+  document.getElementById('hdr-miss').textContent = `未検出 ${miss}ページ`;
+  document.getElementById('hdr-ok').textContent  = `検出済 ${ok}ページ`;
+}
+
+function setCardOrientation(imgEl, cardId) {
+  if (imgEl.naturalWidth > imgEl.naturalHeight) {
+    const card = document.getElementById(cardId);
+    if (card) card.classList.add('landscape');
+  }
+}
+
+async function saveTemplate() {
+  if (!pendingReg) return;
+  const name = document.getElementById('tmpl-name-input').value.trim();
+  if (!name) {
+    document.getElementById('tmpl-name-input').focus();
+    return;
+  }
+  const useColor = document.getElementById('reg-color-check').checked;
+
+  const btn = document.getElementById('btn-register');
+  const regRes = document.getElementById('reg-result');
+  btn.disabled = true; btn.textContent = '登録中…';
+
+  try {
+    const r = await fetch('/save_band_from_review', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        job_id: JOB_ID,
+        page_index: pendingReg.page_index,
+        y0_ratio: pendingReg.y0_ratio,
+        y1_ratio: pendingReg.y1_ratio,
+        template_name: name,
+        use_color: useColor,
+      })
+    });
+    const data = await r.json();
+    if (data.ok) {
+      regRes.className = 'reg-result ok';
+      regRes.textContent = `✓ 「${data.name}」として登録しました`;
+      regRes.style.display = 'block';
+      btn.textContent = '登録済み';
+      // 1.2秒後にモーダルを閉じる
+      setTimeout(() => closeModal(), 300);
+    } else {
+      throw new Error(data.error || 'エラー');
+    }
+  } catch(e) {
+    regRes.className = 'reg-result err';
+    regRes.textContent = '✗ ' + e.message;
+    regRes.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'テンプレとして登録';
+  }
+}
+
+function skipRegister() {
+  // 登録せずにモーダルを閉じる（0.1秒後）
+  setTimeout(() => closeModal(), 100);
+}
+</script>
+</body>
+</html>

@@ -93,17 +93,8 @@
           txt.textContent = missedCount > 0
             ? `完了しました（未検出: ${missedCount}ページ）`
             : "完了しました（全ページ検出済み）";
-          const url = buildDownloadUrl();
-          dl.href = url;
-          done.style.display = "block";
           clearInterval(timer);
-          showMissedPages(p.missed_pages);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = "";
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
+          window.location.href = p.review_url;
           return;
         }
 

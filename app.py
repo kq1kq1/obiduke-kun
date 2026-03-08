@@ -137,11 +137,36 @@ def save_hit_counts(counts: dict):
         print(f"[warn] hit_counts保存失敗: {e}")
 
 
-def increment_hit_count(tmpl_name: str):
+def increment_hit_count(tmpl_name: str, ssim_score: float = 0.0):
+    """ヒット数と最高スコアを記録する"""
     with hit_count_lock:
         counts = load_hit_counts()
-        counts[tmpl_name] = counts.get(tmpl_name, 0) + 1
+        entry = counts.get(tmpl_name)
+        if isinstance(entry, dict):
+            entry["count"] = entry.get("count", 0) + 1
+            entry["best_ssim"] = max(entry.get("best_ssim", 0.0), ssim_score)
+        else:
+            # 旧形式(int)または未登録
+            old_count = entry if isinstance(entry, int) else 0
+            entry = {"count": old_count + 1, "best_ssim": ssim_score}
+        counts[tmpl_name] = entry
         save_hit_counts(counts)
+
+
+def get_dynamic_threshold(tmpl_name: str, base_threshold: float) -> float:
+    """テンプレごとの実績スコアから動的閾値を返す。
+    実績best_ssim × 0.80 が base_threshold より高ければそちらを使う。
+    実績がない場合はbase_thresholdをそのまま返す。
+    """
+    counts = load_hit_counts()
+    entry = counts.get(tmpl_name)
+    if isinstance(entry, dict):
+        best = entry.get("best_ssim", 0.0)
+        if best >= 0.80:  # 十分な実績がある場合のみ動的閾値を適用
+            dynamic = best * 0.80
+            if dynamic > base_threshold:
+                return dynamic
+    return base_threshold
 
 
 # ============================================
@@ -423,11 +448,14 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
                 if (best_any is None) or (s1 > best_any[0]):
                     best_any = (s1, m1, orient, 0, gy0, region_w_global, gy1)
 
-                if s1 >= config.ssim_threshold and m1 <= config.mse_threshold:
+                dyn_thresh = get_dynamic_threshold(tmpl.name,
+                                                   config.ssim_threshold)
+                if s1 >= dyn_thresh and m1 <= config.mse_threshold:
                     if DEBUG_DETECT:
                         print(
                             f"[scan] page={page_index} mse_pass={mse_pass_count} "
-                            f"HIT ssim={s1:.3f} tmpl={tmpl.name}")
+                            f"HIT ssim={s1:.3f} dyn_thresh={dyn_thresh:.3f} tmpl={tmpl.name}"
+                        )
                     return (s1, m1, orient, 0, gy0, region_w_global, gy1, tmpl)
 
                 if s1 >= 0.92:
@@ -486,7 +514,9 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
             gy0 = y0 + v_offset
             gy1 = gy0 + target_h
 
-            if s1 >= config.ssim_threshold and m1 <= config.mse_threshold:
+            dyn_thresh = get_dynamic_threshold(tmpl.name,
+                                               config.ssim_threshold)
+            if s1 >= dyn_thresh and m1 <= config.mse_threshold:
                 return (s1, m1, orient, 0, gy0, region_w_global, gy1, tmpl)
 
         return None
@@ -497,9 +527,9 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
         bottom_windows = build_candidate_windows("bottom")
         hit_bottom = scan(bottom_windows)
         if hit_bottom is not None:
-            _, m_hit, o, x0, y0, x1, y1, hit_tmpl = hit_bottom
+            s_hit, m_hit, o, x0, y0, x1, y1, hit_tmpl = hit_bottom
             results.append((o, x0, y0, x1, y1))
-            increment_hit_count(hit_tmpl.name)
+            increment_hit_count(hit_tmpl.name, s_hit)
 
             center_windows = build_candidate_windows("center")
             hit_center = scan_single_tmpl(center_windows, hit_tmpl)
@@ -516,17 +546,17 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
                     f"mse_prefilter={mse_prefilter:.4f}")
             hit_center = scan(center_windows)
             if hit_center is not None:
-                _, m_hit2, o2, x02, y02, x12, y12, hit_tmpl2 = hit_center
+                s_hit2, m_hit2, o2, x02, y02, x12, y12, hit_tmpl2 = hit_center
                 results.append((o2, x02, y02, x12, y12))
-                increment_hit_count(hit_tmpl2.name)
+                increment_hit_count(hit_tmpl2.name, s_hit2)
 
     else:
         windows = build_candidate_windows("all")
         hit = scan(windows)
         if hit is not None:
-            _, _, o, x0, y0, x1, y1, hit_tmpl = hit
+            s_hit3, _, o, x0, y0, x1, y1, hit_tmpl = hit
             results.append((o, x0, y0, x1, y1))
-            increment_hit_count(hit_tmpl.name)
+            increment_hit_count(hit_tmpl.name, s_hit3)
 
     if DEBUG_DETECT and best_any is not None:
         s_best, m_best, _, bx0, by0, bx1, by1 = best_any
@@ -587,6 +617,7 @@ def process_pdf_single(input_path, own_band_path, page_offset=0):
     doc = fitz.open(input_path)
     pages_out = []
     missed = []
+    page_results = []  # 各ページの検出結果メタデータ
 
     for i, page in enumerate(doc):
         rect = page.rect
@@ -599,13 +630,35 @@ def process_pdf_single(input_path, own_band_path, page_offset=0):
         c_blurred = to_color_blurred(img)
         dets = detect_band(g_blurred, c_blurred, page_index=i + 1)
 
+        abs_idx = page_offset + i
         if dets:
+            det_info = []
             for det in dets:
                 img = apply_band(img, det, own_band_path)
+                _o, _x0, _y0, _x1, _y1 = det
+                det_info.append({
+                    "x0": _x0,
+                    "y0": _y0,
+                    "x1": _x1,
+                    "y1": _y1,
+                    "tmpl_name": "",
+                })
+            page_results.append({
+                "page_index": abs_idx,
+                "page_label": f"{abs_idx + 1}ページ目",
+                "missed": False,
+                "detections": det_info,
+            })
         else:
             missed.append({
-                "page_index": page_offset + i,
-                "page_label": f"{page_offset + i + 1}ページ目",
+                "page_index": abs_idx,
+                "page_label": f"{abs_idx + 1}ページ目",
+            })
+            page_results.append({
+                "page_index": abs_idx,
+                "page_label": f"{abs_idx + 1}ページ目",
+                "missed": True,
+                "detections": [],
             })
 
         with progress_lock:
@@ -613,7 +666,7 @@ def process_pdf_single(input_path, own_band_path, page_offset=0):
 
         pages_out.append(img)
 
-    return pages_out, missed
+    return pages_out, missed, page_results
 
 
 # ============================================
@@ -868,33 +921,42 @@ def handle_pdf():
             db.load()
             all_pages = []
             all_missed = []
+            all_page_results = []
             page_offset = 0
 
             for in_path in in_paths:
-                pages, missed = process_pdf_single(in_path, own_band_path,
-                                                   page_offset)
+                pages, missed, page_results = process_pdf_single(
+                    in_path, own_band_path, page_offset)
                 all_pages.extend(pages)
                 all_missed.extend(missed)
+                all_page_results.extend(page_results)
                 page_offset += len(pages)
 
             if not all_pages:
                 raise Exception("処理結果が空です")
 
+            # 全ページ画像を保存（フルサイズ・サムネイル）
+            pages_dir = os.path.join(DIR_OUTPUT, job_id + "_pages")
             thumb_dir = os.path.join(DIR_OUTPUT, job_id + "_thumbs")
+            os.makedirs(pages_dir, exist_ok=True)
             os.makedirs(thumb_dir, exist_ok=True)
-            for m in all_missed:
-                idx = m["page_index"]
-                thumb = all_pages[idx].copy()
-                thumb.thumbnail((300, 400))
-                thumb.save(os.path.join(thumb_dir, f"{idx}.jpg"))
 
-            first, *rest = all_pages
-            # ★ quality=85でJPEG圧縮: ファイルサイズ1/5〜1/8
-            first.save(out_path, save_all=True, append_images=rest, quality=85)
+            for idx, img in enumerate(all_pages):
+                img.save(os.path.join(pages_dir, f"page_{idx}.jpg"),
+                         quality=90)
+                thumb = img.copy()
+                thumb.thumbnail((300, 424))
+                thumb.save(os.path.join(thumb_dir, f"page_{idx}.jpg"),
+                           quality=85)
+
+            # メタデータ保存
+            meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(all_page_results, f, ensure_ascii=False)
 
             with progress_lock:
                 progress["status"] = "done"
-                progress["download"] = os.path.basename(out_path)
+                progress["job_id"] = job_id
                 progress["missed_pages"] = all_missed
 
         except Exception as e:
@@ -948,43 +1010,38 @@ def upload_own_band():
 def delete_own_band():
     filename = request.form.get("filename")
     if not filename:
-        flash("ファイル名が指定されていません")
-        return redirect(url_for("bands"))
+        return jsonify({"ok": False, "error": "ファイル名が指定されていません"}), 400
     safe_name = os.path.basename(filename)
     path = os.path.join(DIR_OWN_BANDS, safe_name)
     if os.path.isfile(path):
         os.remove(path)
-        flash(f"「{safe_name}」を削除しました")
+        return jsonify({"ok": True})
     else:
-        flash("ファイルが見つかりませんでした")
-    return redirect(url_for("bands"))
+        return jsonify({"ok": False, "error": "ファイルが見つかりませんでした"}), 404
 
 
 @app.route("/bands/delete", methods=["POST"])
 def delete_band():
     filename = request.form.get("filename")
     if not filename:
-        flash("ファイル名が指定されていません")
-        return redirect(url_for("bands"))
+        return jsonify({"ok": False, "error": "ファイル名が指定されていません"}), 400
 
     safe_name = os.path.basename(filename)
     path = os.path.join(DIR_TEMPLATES, safe_name)
 
     if os.path.isfile(path):
         os.remove(path)
-        flash(f"「{safe_name}」を削除しました")
+        db.load()
+        return jsonify({"ok": True})
     else:
-        flash("ファイルが見つかりませんでした")
-
-    return redirect(url_for("bands"))
+        return jsonify({"ok": False, "error": "ファイルが見つかりませんでした"}), 404
 
 
 @app.route("/bands/delete_bulk", methods=["POST"])
 def delete_band_bulk():
     filenames = request.form.getlist("filenames")
     if not filenames:
-        flash("削除するファイルが選択されていません")
-        return redirect(url_for("bands"))
+        return jsonify({"ok": False, "error": "削除するファイルが選択されていません"}), 400
 
     deleted = []
     errors = []
@@ -1000,12 +1057,8 @@ def delete_band_bulk():
         else:
             errors.append(f"{safe_name}: 見つかりませんでした")
 
-    if deleted:
-        flash(f"{len(deleted)}件を削除しました")
-    for e in errors:
-        flash(f"エラー: {e}")
-
-    return redirect(url_for("bands"))
+    db.load()
+    return jsonify({"ok": True, "deleted": deleted, "errors": errors})
 
 
 @app.route("/bands/rename", methods=["POST"])
@@ -1014,8 +1067,7 @@ def rename_band():
     new_name = request.form.get("new_name")
 
     if not old_name or not new_name:
-        flash("名前が正しく指定されていません")
-        return redirect(url_for("bands"))
+        return jsonify({"ok": False, "error": "名前が正しく指定されていません"}), 400
 
     old_name = os.path.basename(old_name)
     new_name = os.path.basename(new_name)
@@ -1032,32 +1084,27 @@ def rename_band():
     new_path = os.path.join(DIR_TEMPLATES, new_name_final)
 
     if not os.path.isfile(old_path):
-        flash("元ファイルが見つかりませんでした")
-        return redirect(url_for("bands"))
+        return jsonify({"ok": False, "error": "元ファイルが見つかりませんでした"}), 404
 
     if os.path.exists(new_path) and new_path != old_path:
-        flash("同じ名前のファイルが既に存在します")
-        return redirect(url_for("bands"))
+        return jsonify({"ok": False, "error": "同じ名前のファイルが既に存在します"}), 409
 
     os.rename(old_path, new_path)
-    flash(f"「{old_name}」を「{new_name_final}」に変更しました")
-
-    return redirect(url_for("bands"))
+    db.load()
+    return jsonify({"ok": True, "new_name": new_name_final})
 
 
 @app.route("/bands/toggle_color", methods=["POST"])
 def toggle_color_band():
     filename = request.form.get("filename")
     if not filename:
-        flash("ファイル名が指定されていません")
-        return redirect(url_for("bands"))
+        return jsonify({"ok": False, "error": "ファイル名が指定されていません"}), 400
 
     safe_name = os.path.basename(filename)
     old_path = os.path.join(DIR_TEMPLATES, safe_name)
 
     if not os.path.isfile(old_path):
-        flash("ファイルが見つかりませんでした")
-        return redirect(url_for("bands"))
+        return jsonify({"ok": False, "error": "ファイルが見つかりませんでした"}), 404
 
     root, ext = os.path.splitext(safe_name)
 
@@ -1077,33 +1124,198 @@ def toggle_color_band():
     new_path = os.path.join(DIR_TEMPLATES, new_name)
 
     if os.path.exists(new_path) and new_path != old_path:
-        flash("同じ名前のファイルが既に存在します")
-        return redirect(url_for("bands"))
+        return jsonify({"ok": False, "error": "同じ名前のファイルが既に存在します"}), 409
 
     os.rename(old_path, new_path)
-    flash(f"「{safe_name}」を{action}モードに変更しました → 「{new_name}」")
-
-    return redirect(url_for("bands"))
+    db.load()
+    return jsonify({
+        "ok": True,
+        "new_name": new_name,
+        "is_color": "_color" in new_name
+    })
 
 
 @app.route("/progress")
 def get_progress():
     with progress_lock:
+        job_id = progress["job_id"]
         return {
             "status": progress["status"],
             "current": progress["current"],
             "total": progress["total"],
-            "job_id": progress["job_id"],
+            "job_id": job_id,
             "error": progress["error"],
             "missed_pages": progress.get("missed_pages", []),
+            "review_url": f"/review/{job_id}" if job_id else None,
         }
+
+
+@app.route("/review/<job_id>")
+def review(job_id):
+    meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
+    if not os.path.exists(meta_path):
+        return "job not found", 404
+    with open(meta_path, encoding="utf-8") as f:
+        page_results = json.load(f)
+    missed_pages = [p for p in page_results if p["missed"]]
+    ok_pages = [p for p in page_results if not p["missed"]]
+    return render_template("review.html",
+                           job_id=job_id,
+                           missed_pages=missed_pages,
+                           ok_pages=ok_pages,
+                           total=len(page_results))
+
+
+@app.route("/page_img/<job_id>/<int:page_index>")
+def page_img(job_id, page_index):
+    pages_dir = os.path.join(DIR_OUTPUT, job_id + "_pages")
+    path = os.path.join(pages_dir, f"page_{page_index}.jpg")
+    if not os.path.exists(path):
+        return "not found", 404
+    return send_file(path, mimetype="image/jpeg")
+
+
+@app.route("/thumb_all/<job_id>/<int:page_index>")
+def thumb_all(job_id, page_index):
+    thumb_dir = os.path.join(DIR_OUTPUT, job_id + "_thumbs")
+    path = os.path.join(thumb_dir, f"page_{page_index}.jpg")
+    if not os.path.exists(path):
+        return "not found", 404
+    return send_file(path, mimetype="image/jpeg")
+
+
+@app.route("/manual_band/<job_id>/<int:page_index>", methods=["POST"])
+def manual_band(job_id, page_index):
+    """手動帯付け: {y0_ratio, y1_ratio} を受け取ってページ画像を更新"""
+    data = request.get_json()
+    y0_ratio = float(data.get("y0_ratio", 0))
+    y1_ratio = float(data.get("y1_ratio", 1))
+
+    pages_dir = os.path.join(DIR_OUTPUT, job_id + "_pages")
+    thumb_dir = os.path.join(DIR_OUTPUT, job_id + "_thumbs")
+    page_path = os.path.join(pages_dir, f"page_{page_index}.jpg")
+    if not os.path.exists(page_path):
+        return jsonify({"error": "page not found"}), 404
+
+    own_band_path = get_own_band_path()
+    if not os.path.isfile(own_band_path):
+        return jsonify({"error": "own band not found"}), 404
+
+    img = Image.open(page_path).convert("RGB")
+    w, h = img.size
+    y0 = int(y0_ratio * h)
+    y1 = int(y1_ratio * h)
+
+    det = ("portrait", 0, y0, w, y1
+           )  # apply_band expects (orient, x0, y0, x1, y1)
+
+    img = apply_band(img, det, own_band_path)
+    img.save(page_path, quality=90)
+
+    thumb = img.copy()
+    thumb.thumbnail((300, 424))
+    thumb.save(os.path.join(thumb_dir, f"page_{page_index}.jpg"), quality=85)
+
+    meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
+    with open(meta_path, encoding="utf-8") as f:
+        meta = json.load(f)
+    for p in meta:
+        if p["page_index"] == page_index:
+            p["missed"] = False
+            p["detections"].append({
+                "x0": 0,
+                "y0": y0,
+                "x1": w,
+                "y1": y1,
+                "tmpl_name": "manual"
+            })
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+
+    import time
+    return jsonify({"ok": True, "ts": int(time.time())})
+
+
+@app.route("/save_band_from_review", methods=["POST"])
+def save_band_from_review():
+    """手動帯付け後の帯画像をテンプレートとして登録"""
+    data = request.get_json()
+    job_id = data.get("job_id")
+    page_index = int(data.get("page_index", 0))
+    y0_ratio = float(data.get("y0_ratio", 0))
+    y1_ratio = float(data.get("y1_ratio", 1))
+    tmpl_name = (data.get("template_name") or "band_template").strip()
+    use_color = bool(data.get("use_color", False))
+
+    pages_dir = os.path.join(DIR_OUTPUT, job_id + "_pages")
+    page_path = os.path.join(pages_dir, f"page_{page_index}.jpg")
+    if not os.path.exists(page_path):
+        return jsonify({"ok": False, "error": "page not found"}), 404
+
+    try:
+        # 手動帯付け済みページ画像から帯部分を切り出す
+        # ※ページ画像はapply_band後なので帯が貼られた状態
+        # 元の（帯付け前の）画像を復元できないため、
+        # y0/y1範囲をそのままcropして保存
+        img = Image.open(page_path).convert("RGB")
+        w, h = img.size
+        y0 = max(0, int(y0_ratio * h))
+        y1 = min(h, int(y1_ratio * h))
+        if y1 <= y0:
+            return jsonify({"ok": False, "error": "無効な範囲です"}), 400
+
+        band_img = img.crop((0, y0, w, y1))
+
+        # 1200pxにリサイズ（既存テンプレと同じ仕様）
+        target_w = 1200
+        if w != target_w:
+            new_h = max(1, int((y1 - y0) * (target_w / w)))
+            band_img = band_img.resize((target_w, new_h), Image.LANCZOS)
+
+        uid = str(uuid.uuid4())[:8]
+        base = re.sub(r'[^\w\-]', '_', tmpl_name)
+        if use_color:
+            out_name = f"{base}_color_{uid}.png"
+        else:
+            out_name = f"{base}_{uid}.png"
+
+        out_path = os.path.join(DIR_TEMPLATES, out_name)
+        band_img.save(out_path)
+
+        # テンプレキャッシュをリロード
+        db.load()
+
+        return jsonify({"ok": True, "name": out_name})
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/download/<job_id>")
 def download(job_id):
+    """全ページ画像からPDFを生成してダウンロード"""
+    meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
+    pages_dir = os.path.join(DIR_OUTPUT, job_id + "_pages")
     out_path = os.path.join(DIR_OUTPUT, job_id + "_out.pdf")
-    if not os.path.exists(out_path):
+
+    if not os.path.exists(meta_path):
         return "not ready", 404
+
+    with open(meta_path, encoding="utf-8") as f:
+        meta = json.load(f)
+
+    pages = []
+    for p in sorted(meta, key=lambda x: x["page_index"]):
+        img_path = os.path.join(pages_dir, f"page_{p['page_index']}.jpg")
+        if os.path.exists(img_path):
+            pages.append(Image.open(img_path).convert("RGB"))
+
+    if not pages:
+        return "no pages", 404
+
+    first, *rest = pages
+    first.save(out_path, save_all=True, append_images=rest, quality=85)
+
     return send_file(out_path, as_attachment=True, download_name="output.pdf")
 
 

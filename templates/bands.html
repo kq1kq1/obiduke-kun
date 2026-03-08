@@ -21,12 +21,19 @@
     .own-band-preview { max-width: 220px; max-height: 60px; border: 1px solid #ddd; border-radius: 4px; }
     .own-band-name { font-size: 13px; color: #444; flex: 1; }
     .btn-delete { background: #b00020; color: #fff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+    .btn-delete:hover { background: #8b0018; }
 
     /* 他社帯一覧 */
-    .bulk-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 10px 14px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; }
+    .bulk-bar {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+      padding: 10px 14px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px;
+    }
     .bulk-bar button { background: #b00020; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; }
     .bulk-bar button:disabled { background: #ccc; cursor: default; }
+    .bulk-bar-left { display: flex; align-items: center; gap: 10px; flex: 1; }
     #selected-count { font-size: 14px; color: #555; }
+    .btn-select-all { font-size: 13px; color: #555; background: none; border: 1px solid #ccc; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+    .btn-select-all:hover { background: #f0f0f0; }
 
     .company-group { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
     .company-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #f0f0f0; cursor: pointer; user-select: none; }
@@ -47,12 +54,20 @@
     .template-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
     .name-input { width: 160px; font-size: 13px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; }
     .btn-rename { background: #555; color: #fff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+    .btn-rename:hover { background: #333; }
 
-    /* カラーモード切り替えボタン */
     .btn-color-on  { background: #e74c3c; color: #fff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; white-space: nowrap; }
     .btn-color-off { background: #95a5a6; color: #fff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; white-space: nowrap; }
     .btn-color-on:hover  { background: #c0392b; }
     .btn-color-off:hover { background: #7f8c8d; }
+
+    /* トースト通知 */
+    #toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(60px);
+      background: #222; color: #fff; padding: 10px 20px; border-radius: 8px;
+      font-size: 14px; opacity: 0; transition: all 0.25s; pointer-events: none; z-index: 999;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   </style>
 </head>
 <body>
@@ -80,13 +95,11 @@
   {% if own_bands %}
     <div>
       {% for b in own_bands %}
-        <div class="own-band-row">
+        <div class="own-band-row" id="own-row-{{ loop.index }}">
           <img src="{{ url_for('own_band_file', filename=b) }}" class="own-band-preview" alt="{{ b }}">
           <span class="own-band-name">{{ b }}</span>
-          <form action="{{ url_for('delete_own_band') }}" method="post" onsubmit="return confirm('「{{ b }}」を削除しますか？');">
-            <input type="hidden" name="filename" value="{{ b }}">
-            <button type="submit" class="btn-delete">削除</button>
-          </form>
+          <button class="btn-delete"
+            onclick="deleteOwnBand('{{ b }}', 'own-row-{{ loop.index }}')">削除</button>
         </div>
       {% endfor %}
     </div>
@@ -106,85 +119,198 @@
 </div>
 
 <!-- ========== 他社帯テンプレ一覧 ========== -->
-<h2>他社帯テンプレ（{{ templates|length }}件）</h2>
+<h2>他社帯テンプレ（<span id="tmpl-total">{{ templates|length }}</span>件）</h2>
 
 {% if templates %}
-  <form id="bulk-delete-form" action="{{ url_for('delete_band_bulk') }}" method="post" onsubmit="return confirmBulkDelete();">
-    <div class="bulk-bar">
+  <!-- 一括削除バー（formなし・JS制御） -->
+  <div class="bulk-bar">
+    <div class="bulk-bar-left">
       <span id="selected-count">0件選択中</span>
-      <button type="submit" id="bulk-delete-btn" disabled>選択したものを削除</button>
+      <button class="btn-select-all" onclick="selectAll()">全選択</button>
+      <button class="btn-select-all" onclick="selectNone()">全解除</button>
     </div>
+    <button id="bulk-delete-btn" disabled onclick="bulkDelete()">選択したものを削除</button>
+  </div>
 
-    {% set groups = {} %}
-    {% for t in templates %}
-      {% set company = t.split('_')[0] if '_' in t else '未分類' %}
-      {% if company not in groups %}
-        {% set _ = groups.update({company: []}) %}
-      {% endif %}
-      {% set _ = groups[company].append(t) %}
-    {% endfor %}
+  {% set groups = {} %}
+  {% for t in templates %}
+    {% set company = t.split('_')[0] if '_' in t else '未分類' %}
+    {% if company not in groups %}
+      {% set _ = groups.update({company: []}) %}
+    {% endif %}
+    {% set _ = groups[company].append(t) %}
+  {% endfor %}
 
-    {% for company, items in groups.items() %}
-      <div class="company-group">
-        <div class="company-header" onclick="toggleGroup(this)">
-          <span class="company-name">🏢 {{ company }}</span>
-          <span class="company-count">{{ items|length }}件</span>
-          <span class="toggle-icon">▼</span>
-        </div>
-        <div class="template-list">
-          {% for t in items %}
-            <div class="template-row">
-              <input type="checkbox" name="filenames" value="{{ t }}" onchange="updateCount()">
-              <img src="{{ url_for('band_template_file', filename=t) }}" alt="{{ t }}" class="band-preview">
-              <span class="template-name">{{ t }}</span>
-              <div class="template-actions">
-                <form action="{{ url_for('rename_band') }}" method="post" style="display:flex;gap:4px;align-items:center;">
-                  <input type="hidden" name="old_name" value="{{ t }}">
-                  <input type="text" name="new_name" value="{{ t }}" class="name-input">
-                  <button type="submit" class="btn-rename">変更</button>
-                </form>
-                <!-- カラーモード切り替え -->
-                <form action="{{ url_for('toggle_color_band') }}" method="post">
-                  <input type="hidden" name="filename" value="{{ t }}">
-                  {% if '_color' in t %}
-                    <button type="submit" class="btn-color-on" title="カラーモード有効 → クリックでグレーに変更">🎨 カラー</button>
-                  {% else %}
-                    <button type="submit" class="btn-color-off" title="グレーモード → クリックでカラーに変更">⬜ グレー</button>
-                  {% endif %}
-                </form>
-                <form action="{{ url_for('delete_band') }}" method="post" onsubmit="return confirm('「{{ t }}」を削除しますか？');">
-                  <input type="hidden" name="filename" value="{{ t }}">
-                  <button type="submit" class="btn-delete">削除</button>
-                </form>
-              </div>
-            </div>
-          {% endfor %}
-        </div>
+  <div id="template-container">
+  {% for company, items in groups.items() %}
+    <div class="company-group" id="group-{{ company }}">
+      <div class="company-header open" onclick="toggleGroup(this)">
+        <span class="company-name">🏢 {{ company }}</span>
+        <span class="company-count" id="count-{{ company }}">{{ items|length }}件</span>
+        <span class="toggle-icon">▼</span>
       </div>
-    {% endfor %}
-  </form>
+      <div class="template-list open">
+        {% for t in items %}
+        <div class="template-row" id="row-{{ t | replace('.', '-') | replace('_', '-') }}">
+          <input type="checkbox" class="tmpl-check" value="{{ t }}" onchange="updateCount()">
+          <img src="{{ url_for('band_template_file', filename=t) }}" alt="{{ t }}" class="band-preview">
+          <span class="template-name">{{ t }}</span>
+          <div class="template-actions">
+            <input type="text" class="name-input" value="{{ t }}" id="rename-input-{{ loop.index }}">
+            <button class="btn-rename"
+              onclick="renameBand('{{ t }}', 'rename-input-{{ loop.index }}', this)">変更</button>
+            <button class="{% if '_color' in t %}btn-color-on{% else %}btn-color-off{% endif %}"
+              id="color-btn-{{ loop.index }}"
+              onclick="toggleColor('{{ t }}', {{ loop.index }}, this)">
+              {% if '_color' in t %}🎨 カラー{% else %}⬜ グレー{% endif %}
+            </button>
+            <button class="btn-delete"
+              onclick="deleteBand('{{ t }}', this)">削除</button>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  {% endfor %}
+  </div>
 
 {% else %}
   <p>テンプレ無し</p>
 {% endif %}
 
+<div id="toast"></div>
+
 <script>
+  /* ── トースト ── */
+  function toast(msg, isErr) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.style.background = isErr ? '#b00020' : '#222';
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 2200);
+  }
+
+  /* ── グループ開閉 ── */
   function toggleGroup(header) {
     header.classList.toggle('open');
     header.nextElementSibling.classList.toggle('open');
   }
-  document.querySelectorAll('.company-header').forEach(h => {
-    h.classList.add('open');
-    h.nextElementSibling.classList.add('open');
-  });
+
+  /* ── チェックボックス管理 ── */
   function updateCount() {
-    const checked = document.querySelectorAll('input[name=filenames]:checked').length;
+    const checked = document.querySelectorAll('.tmpl-check:checked').length;
     document.getElementById('selected-count').textContent = checked + '件選択中';
     document.getElementById('bulk-delete-btn').disabled = checked === 0;
   }
-  function confirmBulkDelete() {
-    const count = document.querySelectorAll('input[name=filenames]:checked').length;
-    return confirm(count + '件のテンプレを削除しますか？');
+  function selectAll() {
+    document.querySelectorAll('.tmpl-check').forEach(c => c.checked = true);
+    updateCount();
+  }
+  function selectNone() {
+    document.querySelectorAll('.tmpl-check').forEach(c => c.checked = false);
+    updateCount();
+  }
+
+  /* ── 一括削除 ── */
+  async function bulkDelete() {
+    const checked = [...document.querySelectorAll('.tmpl-check:checked')];
+    if (!checked.length) return;
+    if (!confirm(checked.length + '件のテンプレを削除しますか？')) return;
+
+    const fd = new FormData();
+    checked.forEach(c => fd.append('filenames', c.value));
+
+    const r = await fetch('/bands/delete_bulk', { method: 'POST', body: fd });
+    if (r.ok) {
+      checked.forEach(c => {
+        const row = c.closest('.template-row');
+        if (row) row.remove();
+      });
+      updateCount();
+      updateTotals();
+      toast(checked.length + '件を削除しました');
+    } else {
+      toast('削除に失敗しました', true);
+    }
+  }
+
+  /* ── 個別削除 ── */
+  async function deleteBand(filename, btn) {
+    if (!confirm('「' + filename + '」を削除しますか？')) return;
+    const fd = new FormData();
+    fd.append('filename', filename);
+    const r = await fetch('/bands/delete', { method: 'POST', body: fd });
+    if (r.ok) {
+      btn.closest('.template-row').remove();
+      updateTotals();
+      toast('削除しました');
+    } else {
+      toast('削除に失敗しました', true);
+    }
+  }
+
+  /* ── 自社帯削除 ── */
+  async function deleteOwnBand(filename, rowId) {
+    if (!confirm('「' + filename + '」を削除しますか？')) return;
+    const fd = new FormData();
+    fd.append('filename', filename);
+    const r = await fetch('/own_bands/delete', { method: 'POST', body: fd });
+    if (r.ok) {
+      const row = document.getElementById(rowId);
+      if (row) row.remove();
+      toast('削除しました');
+    } else {
+      toast('削除に失敗しました', true);
+    }
+  }
+
+  /* ── リネーム ── */
+  async function renameBand(oldName, inputId, btn) {
+    const newName = document.getElementById(inputId).value.trim();
+    if (!newName || newName === oldName) return;
+    const fd = new FormData();
+    fd.append('old_name', oldName);
+    fd.append('new_name', newName);
+    const r = await fetch('/bands/rename', { method: 'POST', body: fd });
+    if (r.ok) {
+      toast('名前を変更しました（再読み込みで反映）');
+    } else {
+      toast('変更に失敗しました', true);
+    }
+  }
+
+  /* ── カラーモード切り替え ── */
+  async function toggleColor(filename, idx, btn) {
+    const fd = new FormData();
+    fd.append('filename', filename);
+    const r = await fetch('/bands/toggle_color', { method: 'POST', body: fd });
+    if (r.ok) {
+      const isColor = filename.includes('_color');
+      if (isColor) {
+        btn.className = 'btn-color-off';
+        btn.textContent = '⬜ グレー';
+      } else {
+        btn.className = 'btn-color-on';
+        btn.textContent = '🎨 カラー';
+      }
+      toast('カラーモードを切り替えました（再読み込みで反映）');
+    } else {
+      toast('切り替えに失敗しました', true);
+    }
+  }
+
+  /* ── 件数更新 ── */
+  function updateTotals() {
+    // 全体件数
+    const total = document.querySelectorAll('.template-row').length;
+    document.getElementById('tmpl-total').textContent = total;
+    // グループごとの件数 + 空グループ非表示
+    document.querySelectorAll('.company-group').forEach(group => {
+      const rows = group.querySelectorAll('.template-row').length;
+      const countEl = group.querySelector('.company-count');
+      if (countEl) countEl.textContent = rows + '件';
+      group.style.display = rows === 0 ? 'none' : '';
+    });
   }
 </script>
 </body>
