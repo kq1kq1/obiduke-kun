@@ -141,9 +141,12 @@ def increment_hit_count(tmpl_name: str, ssim_score: float = 0.0):
     with hit_count_lock:
         counts = load_hit_counts()
         entry = counts.get(tmpl_name)
+        # ★ FIX: numpy.float32 → Python float に変換してJSON serializable にする
+        ssim_score = float(ssim_score)
         if isinstance(entry, dict):
             entry["count"] = entry.get("count", 0) + 1
-            entry["best_ssim"] = max(entry.get("best_ssim", 0.0), ssim_score)
+            entry["best_ssim"] = float(
+                max(entry.get("best_ssim", 0.0), ssim_score))
         else:
             # 旧形式(int)または未登録
             old_count = entry if isinstance(entry, int) else 0
