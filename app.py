@@ -48,7 +48,7 @@ class DetectionConfig:
     band_height_ratio: float = 0.16
 
     # hrフィルタ: expected_hr ± この値の範囲のウィンドウのみ比較
-    hr_filter_margin: float = 0.015
+    hr_filter_margin: float = 0.020  # 0.015→0.020: ±24pxまで許容（検出漏れ改善）
 
 
 BASE = os.path.dirname(__file__)
@@ -67,7 +67,8 @@ def get_own_band_path(band_name=None):
             return path
     if os.path.isdir(DIR_OWN_BANDS):
         files = [
-            f for f in os.listdir(DIR_OWN_BANDS)
+            f
+            for f in os.listdir(DIR_OWN_BANDS)
             if f.lower().endswith((".png", ".jpg", ".jpeg"))
         ]
         if files:
@@ -79,29 +80,58 @@ def list_own_bands():
     if not os.path.isdir(DIR_OWN_BANDS):
         return []
     files = [
-        f for f in os.listdir(DIR_OWN_BANDS)
+        f
+        for f in os.listdir(DIR_OWN_BANDS)
         if f.lower().endswith((".png", ".jpg", ".jpeg"))
     ]
     return sorted(files)
 
 
-def clear_old_files():
-    for d in (DIR_UPLOAD, DIR_OUTPUT):
-        if not os.path.isdir(d):
-            continue
-        for name in os.listdir(d):
-            path = os.path.join(d, name)
-            if os.path.isfile(path):
-                try:
+def clear_old_files(current_job_id: str = None, max_age_seconds: int = 3600):
+    """古いjob_idのファイル・フォルダのみ削除する。
+    current_job_idのファイルは削除しない。
+    max_age_seconds（デフォルト1時間）より古いものだけ削除。
+    """
+    import shutil
+    import time
+
+    now = time.time()
+
+    # uploadsフォルダ: current_job_id以外の古いファイルを削除
+    if os.path.isdir(DIR_UPLOAD):
+        for name in os.listdir(DIR_UPLOAD):
+            path = os.path.join(DIR_UPLOAD, name)
+            # current_job_idを含むファイルは削除しない
+            if current_job_id and current_job_id in name:
+                continue
+            try:
+                age = now - os.path.getmtime(path)
+                if age < max_age_seconds:
+                    continue
+                if os.path.isfile(path):
                     os.remove(path)
-                except Exception as e:
-                    print(f"[warn] {path} を削除できませんでした: {e}")
-            elif os.path.isdir(path):
-                try:
-                    import shutil
+                elif os.path.isdir(path):
                     shutil.rmtree(path)
-                except Exception as e:
-                    print(f"[warn] {path} を削除できませんでした: {e}")
+            except Exception as e:
+                print(f"[warn] {path} を削除できませんでした: {e}")
+
+    # outputsフォルダ: current_job_id以外の古いファイル・フォルダを削除
+    if os.path.isdir(DIR_OUTPUT):
+        for name in os.listdir(DIR_OUTPUT):
+            path = os.path.join(DIR_OUTPUT, name)
+            # current_job_idを含むファイルは削除しない
+            if current_job_id and current_job_id in name:
+                continue
+            try:
+                age = now - os.path.getmtime(path)
+                if age < max_age_seconds:
+                    continue
+                if os.path.isfile(path):
+                    os.remove(path)
+                elif os.path.isdir(path):
+                    shutil.rmtree(path)
+            except Exception as e:
+                print(f"[warn] {path} を削除できませんでした: {e}")
 
 
 os.makedirs(DIR_TEMPLATES, exist_ok=True)
@@ -145,8 +175,7 @@ def increment_hit_count(tmpl_name: str, ssim_score: float = 0.0):
         ssim_score = float(ssim_score)
         if isinstance(entry, dict):
             entry["count"] = entry.get("count", 0) + 1
-            entry["best_ssim"] = float(
-                max(entry.get("best_ssim", 0.0), ssim_score))
+            entry["best_ssim"] = float(max(entry.get("best_ssim", 0.0), ssim_score))
         else:
             # 旧形式(int)または未登録
             old_count = entry if isinstance(entry, int) else 0
@@ -218,7 +247,7 @@ def resize_color(arr, h, w):
 
 
 def mse(a, b):
-    return float(np.mean((a - b)**2))
+    return float(np.mean((a - b) ** 2))
 
 
 # ============================================
@@ -227,7 +256,6 @@ def mse(a, b):
 
 
 class BandTemplate:
-
     def __init__(self, name, gray, color=None):
         self.name = name
         self.gray = gray  # グレースケールraw（ぼかしなし）
@@ -247,7 +275,6 @@ _resized_cache_lock = Lock()
 
 
 class TemplateDB:
-
     def __init__(self):
         self.items: List[BandTemplate] = []
 
@@ -256,7 +283,8 @@ class TemplateDB:
         _resized_cache.clear()  # テンプレ更新時にキャッシュをリセット
 
         files = [
-            f for f in os.listdir(DIR_TEMPLATES)
+            f
+            for f in os.listdir(DIR_TEMPLATES)
             if f.lower().endswith((".png", ".jpg", ".jpeg"))
         ]
 
@@ -309,17 +337,18 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
 
     # resized_cache はグローバルのものを使用（テンプレ変更時はdb.load()でクリア）
     mse_prefilter = float(getattr(config, "mse_threshold", 0.06)) * float(
-        getattr(config, "mse_prefilter_multiplier", 1.7))
+        getattr(config, "mse_prefilter_multiplier", 1.7)
+    )
     hr_margin = float(getattr(config, "hr_filter_margin", 0.015))
 
     region_w_global = w
     best_any = None
 
     def build_candidate_windows(
-            mode: str,
-            offset_step_landscape: float = 0.015,  # landscape位置ステップ
-            bottom_step_portrait: float = 0.005,
-            center_step_portrait: float = 0.005,  # 0.005: 真ん中帯の検出精度確保
+        mode: str,
+        offset_step_landscape: float = 0.015,  # landscape位置ステップ
+        bottom_step_portrait: float = 0.005,
+        center_step_portrait: float = 0.005,  # 0.005: 真ん中帯の検出精度確保
     ) -> list[tuple[int, int]]:
         candidate_windows: list[tuple[int, int]] = []
 
@@ -404,7 +433,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
                 _resized_cache[key] = resized
 
         v_offset = (region_h - target_h) // 2
-        patch = region[v_offset:v_offset + target_h, :]
+        patch = region[v_offset : v_offset + target_h, :]
 
         return patch, resized
 
@@ -419,7 +448,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
         mse_pass_count = 0
         skipped_hr = 0
 
-        for (y0, y1) in candidate_windows:
+        for y0, y1 in candidate_windows:
             win_h = y1 - y0
             win_hr = win_h / h
 
@@ -434,7 +463,8 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
 
                 # ★ グレーMSEで先行フィルタ（カラーテンプレも先にグレーで弾く）
                 gray_patch, gray_resized = get_patch_and_resized(
-                    tmpl, y0, y1, use_color=False)
+                    tmpl, y0, y1, use_color=False
+                )
                 if gray_patch is None:
                     continue
 
@@ -445,10 +475,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
                 mse_pass_count += 1
 
                 if use_color:
-                    patch, resized = get_patch_and_resized(tmpl,
-                                                           y0,
-                                                           y1,
-                                                           use_color=True)
+                    patch, resized = get_patch_and_resized(tmpl, y0, y1, use_color=True)
                     if patch is None:
                         continue
                     m1 = mse(patch, resized)
@@ -468,8 +495,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
                 if (best_any is None) or (s1 > best_any[0]):
                     best_any = (s1, m1, orient, 0, gy0, region_w_global, gy1)
 
-                dyn_thresh = get_dynamic_threshold(tmpl.name,
-                                                   config.ssim_threshold)
+                dyn_thresh = get_dynamic_threshold(tmpl.name, config.ssim_threshold)
                 if s1 >= dyn_thresh and m1 <= config.mse_threshold:
                     print(
                         f"[scan] page={page_index} HIT ssim={s1:.3f} thresh={dyn_thresh:.3f} tmpl={tmpl.name}"
@@ -487,7 +513,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
     def scan_single_tmpl(candidate_windows: list[tuple[int, int]], tmpl):
         use_color = tmpl.is_color and color_blurred is not None
 
-        for (y0, y1) in candidate_windows:
+        for y0, y1 in candidate_windows:
             win_h = y1 - y0
             win_hr = win_h / h
 
@@ -497,10 +523,9 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
                 continue
 
             # グレーMSEで先行フィルタ
-            gray_patch, gray_resized = get_patch_and_resized(tmpl,
-                                                             y0,
-                                                             y1,
-                                                             use_color=False)
+            gray_patch, gray_resized = get_patch_and_resized(
+                tmpl, y0, y1, use_color=False
+            )
             if gray_patch is None:
                 continue
             m_gray = mse(gray_patch, gray_resized)
@@ -508,10 +533,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
                 continue
 
             if use_color:
-                patch, resized = get_patch_and_resized(tmpl,
-                                                       y0,
-                                                       y1,
-                                                       use_color=True)
+                patch, resized = get_patch_and_resized(tmpl, y0, y1, use_color=True)
                 if patch is None:
                     continue
                 m1 = mse(patch, resized)
@@ -527,8 +549,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
             gy0 = y0 + v_offset
             gy1 = gy0 + target_h
 
-            dyn_thresh = get_dynamic_threshold(tmpl.name,
-                                               config.ssim_threshold)
+            dyn_thresh = get_dynamic_threshold(tmpl.name, config.ssim_threshold)
             if s1 >= dyn_thresh and m1 <= config.mse_threshold:
                 return (s1, m1, orient, 0, gy0, region_w_global, gy1, tmpl)
 
@@ -571,7 +592,7 @@ def detect_band(gray_blurred, color_blurred=None, page_index=None):
     if not results:
         print(f"[detect] page={page_index} NO band detected")
     else:
-        for (o, x0, y0, x1, y1) in results:
+        for o, x0, y0, x1, y1 in results:
             print(
                 f"[detect] page={page_index} HIT orient={o} rect=({x0},{y0})-({x1},{y1})"
             )
@@ -630,13 +651,9 @@ def process_single_page(img, own_band_path, abs_idx, job_id=None):
         for det in dets:
             img = apply_band(img, det, own_band_path)
             _o, _x0, _y0, _x1, _y1 = det
-            det_info.append({
-                "x0": _x0,
-                "y0": _y0,
-                "x1": _x1,
-                "y1": _y1,
-                "tmpl_name": ""
-            })
+            det_info.append(
+                {"x0": _x0, "y0": _y0, "x1": _x1, "y1": _y1, "tmpl_name": ""}
+            )
         page_result = {
             "page_index": abs_idx,
             "page_label": f"{abs_idx + 1}ページ目",
@@ -645,10 +662,7 @@ def process_single_page(img, own_band_path, abs_idx, job_id=None):
         }
         missed_entry = None
     else:
-        missed_entry = {
-            "page_index": abs_idx,
-            "page_label": f"{abs_idx + 1}ページ目"
-        }
+        missed_entry = {"page_index": abs_idx, "page_label": f"{abs_idx + 1}ページ目"}
         page_result = {
             "page_index": abs_idx,
             "page_label": f"{abs_idx + 1}ページ目",
@@ -684,8 +698,9 @@ def process_pdf_single(input_path, own_band_path, page_offset=0, job_id=None):
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
-            executor.submit(process_single_page, img, own_band_path, abs_idx, job_id):
-            local_i
+            executor.submit(
+                process_single_page, img, own_band_path, abs_idx, job_id
+            ): local_i
             for local_i, (abs_idx, img) in enumerate(page_imgs)
         }
         for future in as_completed(futures):
@@ -729,9 +744,7 @@ def make_progress_entry():
     }
 
 
-def render_page_to_pil(doc,
-                       page_index: int,
-                       max_px: int = None) -> Image.Image:
+def render_page_to_pil(doc, page_index: int, max_px: int = None) -> Image.Image:
     if max_px is None:
         max_px = MAX_PX
     page = doc[page_index]
@@ -905,9 +918,9 @@ def save_cropped_band():
 def index():
     other_band_files = os.listdir(DIR_TEMPLATES)
     own_bands = list_own_bands()
-    return render_template("index.html",
-                           templates=other_band_files,
-                           own_bands=own_bands)
+    return render_template(
+        "index.html", templates=other_band_files, own_bands=own_bands
+    )
 
 
 @app.route("/process", methods=["POST"])
@@ -916,8 +929,7 @@ def handle_pdf():
     own_band_name = request.form.get("own_band", "")
 
     valid_pdfs = [
-        f for f in pdf_files
-        if f.filename and f.filename.lower().endswith(".pdf")
+        f for f in pdf_files if f.filename and f.filename.lower().endswith(".pdf")
     ]
     if not valid_pdfs:
         flash("PDFをアップしてください")
@@ -928,9 +940,8 @@ def handle_pdf():
         flash("自社帯が見つかりません。band_default.pngを確認してください。")
         return redirect(url_for("index"))
 
-    clear_old_files()
-
     job_id = str(uuid.uuid4())
+    clear_old_files(current_job_id=job_id)
     out_path = os.path.join(DIR_OUTPUT, job_id + "_out.pdf")
 
     in_paths = []
@@ -969,7 +980,8 @@ def handle_pdf():
 
             for in_path in in_paths:
                 pages, orig_pages, missed, page_results = process_pdf_single(
-                    in_path, own_band_path, page_offset, job_id=job_id)
+                    in_path, own_band_path, page_offset, job_id=job_id
+                )
                 all_pages.extend(pages)
                 all_orig_pages.extend(orig_pages)
                 all_missed.extend(missed)
@@ -988,16 +1000,13 @@ def handle_pdf():
             os.makedirs(orig_dir, exist_ok=True)
 
             for idx, img in enumerate(all_pages):
-                img.save(os.path.join(pages_dir, f"page_{idx}.jpg"),
-                         quality=90)
+                img.save(os.path.join(pages_dir, f"page_{idx}.jpg"), quality=90)
                 thumb = img.copy()
                 thumb.thumbnail((300, 424))
-                thumb.save(os.path.join(thumb_dir, f"page_{idx}.jpg"),
-                           quality=85)
+                thumb.save(os.path.join(thumb_dir, f"page_{idx}.jpg"), quality=85)
 
             for idx, orig in enumerate(all_orig_pages):
-                orig.save(os.path.join(orig_dir, f"page_{idx}.jpg"),
-                          quality=90)
+                orig.save(os.path.join(orig_dir, f"page_{idx}.jpg"), quality=90)
 
             # メタデータ保存
             meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
@@ -1023,13 +1032,12 @@ def handle_pdf():
 @app.route("/bands")
 def bands():
     other_bands = [
-        f for f in os.listdir(DIR_TEMPLATES)
+        f
+        for f in os.listdir(DIR_TEMPLATES)
         if f.lower().endswith((".png", ".jpg", ".jpeg"))
     ]
     own_bands = list_own_bands()
-    return render_template("bands.html",
-                           templates=other_bands,
-                           own_bands=own_bands)
+    return render_template("bands.html", templates=other_bands, own_bands=own_bands)
 
 
 @app.route("/band_templates/<path:filename>")
@@ -1092,7 +1100,9 @@ def delete_band():
 def delete_band_bulk():
     filenames = request.form.getlist("filenames")
     if not filenames:
-        return jsonify({"ok": False, "error": "削除するファイルが選択されていません"}), 400
+        return jsonify(
+            {"ok": False, "error": "削除するファイルが選択されていません"}
+        ), 400
 
     deleted = []
     errors = []
@@ -1138,7 +1148,9 @@ def rename_band():
         return jsonify({"ok": False, "error": "元ファイルが見つかりませんでした"}), 404
 
     if os.path.exists(new_path) and new_path != old_path:
-        return jsonify({"ok": False, "error": "同じ名前のファイルが既に存在します"}), 409
+        return jsonify(
+            {"ok": False, "error": "同じ名前のファイルが既に存在します"}
+        ), 409
 
     os.rename(old_path, new_path)
     db.load()
@@ -1163,7 +1175,7 @@ def toggle_color_band():
         new_root = root.replace("_color", "", 1)
         action = "グレースケール"
     else:
-        uuid_pattern = r'^(.+?)(_[0-9a-f\-]{36})$'
+        uuid_pattern = r"^(.+?)(_[0-9a-f\-]{36})$"
         m = re.match(uuid_pattern, root)
         if m:
             new_root = m.group(1) + "_color" + m.group(2)
@@ -1175,20 +1187,19 @@ def toggle_color_band():
     new_path = os.path.join(DIR_TEMPLATES, new_name)
 
     if os.path.exists(new_path) and new_path != old_path:
-        return jsonify({"ok": False, "error": "同じ名前のファイルが既に存在します"}), 409
+        return jsonify(
+            {"ok": False, "error": "同じ名前のファイルが既に存在します"}
+        ), 409
 
     os.rename(old_path, new_path)
     db.load()
-    return jsonify({
-        "ok": True,
-        "new_name": new_name,
-        "is_color": "_color" in new_name
-    })
+    return jsonify({"ok": True, "new_name": new_name, "is_color": "_color" in new_name})
 
 
 @app.route("/progress")
 def get_progress():
     from flask import request as freq
+
     job_id = freq.args.get("job_id")
     with progress_lock:
         p = all_progress.get(job_id)
@@ -1200,7 +1211,7 @@ def get_progress():
             "job_id": job_id,
             "error": "job not found",
             "missed_pages": [],
-            "review_url": None
+            "review_url": None,
         }
     return {
         "status": p["status"],
@@ -1227,11 +1238,13 @@ def review(job_id):
         page_results = json.load(f)
     missed_pages = [p for p in page_results if p["missed"]]
     ok_pages = [p for p in page_results if not p["missed"]]
-    return render_template("review.html",
-                           job_id=job_id,
-                           missed_pages=missed_pages,
-                           ok_pages=ok_pages,
-                           total=len(page_results))
+    return render_template(
+        "review.html",
+        job_id=job_id,
+        missed_pages=missed_pages,
+        ok_pages=ok_pages,
+        total=len(page_results),
+    )
 
 
 @app.route("/page_img/<job_id>/<int:page_index>")
@@ -1274,8 +1287,7 @@ def manual_band(job_id, page_index):
     y0 = int(y0_ratio * h)
     y1 = int(y1_ratio * h)
 
-    det = ("portrait", 0, y0, w, y1
-           )  # apply_band expects (orient, x0, y0, x1, y1)
+    det = ("portrait", 0, y0, w, y1)  # apply_band expects (orient, x0, y0, x1, y1)
 
     img = apply_band(img, det, own_band_path)
     img.save(page_path, quality=90)
@@ -1290,17 +1302,14 @@ def manual_band(job_id, page_index):
     for p in meta:
         if p["page_index"] == page_index:
             p["missed"] = False
-            p["detections"].append({
-                "x0": 0,
-                "y0": y0,
-                "x1": w,
-                "y1": y1,
-                "tmpl_name": "manual"
-            })
+            p["detections"].append(
+                {"x0": 0, "y0": y0, "x1": w, "y1": y1, "tmpl_name": "manual"}
+            )
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False)
 
     import time
+
     return jsonify({"ok": True, "ts": int(time.time())})
 
 
@@ -1342,7 +1351,7 @@ def save_band_from_review():
             band_img = band_img.resize((target_w, new_h), Image.LANCZOS)
 
         uid = str(uuid.uuid4())[:8]
-        base = re.sub(r'[^\w\-]', '_', tmpl_name)
+        base = re.sub(r"[^\w\-]", "_", tmpl_name)
         if use_color:
             out_name = f"{base}_color_{uid}.png"
         else:
