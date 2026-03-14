@@ -86,7 +86,6 @@
     box-shadow: var(--shadow); cursor: pointer;
     transition: transform 0.15s, box-shadow 0.15s;
     border: 2.5px solid transparent; position: relative;
-    /* 縦長=150px幅、横長=220px幅 → img読み込み後JSで設定 */
     width: 150px;
     flex-shrink: 0;
   }
@@ -160,7 +159,6 @@
     display: block; max-width: 100%; max-height: calc(94vh - 170px); object-fit: contain;
   }
 
-  /* 帯選択オーバーレイ */
   #sel-overlay {
     position: absolute; left: 0; right: 0; pointer-events: none;
     border-top: 3px solid #e8a020; border-bottom: 3px solid #e8a020;
@@ -383,7 +381,7 @@ const JOB_ID = "{{ job_id }}";
 let curPage = null, curMissed = false;
 let selY0 = null, selY1 = null;
 let dragging = false, dragStart = null;
-let pendingReg = null;  // 登録待ち情報 {page_index, y0_ratio, y1_ratio}
+let pendingReg = null;
 
 const modalEl  = document.getElementById('modal');
 const imgEl    = document.getElementById('modal-img');
@@ -397,17 +395,34 @@ function openModal(idx, label, isMissed) {
   imgEl.src = `/page_img/${JOB_ID}/${idx}?t=${Date.now()}`;
   resetSel();
   document.getElementById('apply-result').style.display = 'none';
+
+  // ★ FIX: モーダルを開くたびに登録ボックスとボタンをリセット
+  resetRegisterBox();
+
   modalEl.classList.add('open');
 }
+
+function resetRegisterBox() {
+  const regBox = document.getElementById('register-box');
+  const btnReg = document.getElementById('btn-register');
+  const regRes = document.getElementById('reg-result');
+  regBox.classList.remove('open');
+  regRes.style.display = 'none';
+  regRes.textContent = '';
+  document.getElementById('tmpl-name-input').value = '';
+  document.getElementById('reg-color-check').checked = false;
+  // ★ FIX: ボタンを必ず有効な状態に戻す
+  btnReg.disabled = false;
+  btnReg.textContent = 'テンプレとして登録';
+  pendingReg = null;
+}
+
 function closeModal() {
   modalEl.classList.remove('open');
   curPage = null; curMissed = false;
-  pendingReg = null;
-  document.getElementById('register-box').classList.remove('open');
-  document.getElementById('reg-result').style.display = 'none';
-  document.getElementById('tmpl-name-input').value = '';
-  document.getElementById('reg-color-check').checked = false;
+  resetRegisterBox();
 }
+
 function overlayClick(e) { if (e.target === modalEl) closeModal(); }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
@@ -516,14 +531,12 @@ async function applyBand() {
       sp.style.display = 'none'; txt.textContent = '帯を貼り付け'; btn.disabled = false;
 
       if (curMissed) {
-        // 未検出ページ → 登録ボックスを表示
         pendingReg = { page_index: curPage, y0_ratio, y1_ratio };
         res.className = 'apply-result ok'; res.textContent = '✓ 帯を貼り付けました';
         res.style.display = 'block';
         document.getElementById('register-box').classList.add('open');
         document.getElementById('tmpl-name-input').focus();
       } else {
-        // 検出済みページの修正 → 即close
         res.className = 'apply-result ok'; res.textContent = '✓ 修正しました';
         res.style.display = 'block';
         setTimeout(() => closeModal(), 300);
@@ -586,8 +599,10 @@ async function saveTemplate() {
       regRes.textContent = `✓ 「${data.name}」として登録しました`;
       regRes.style.display = 'block';
       btn.textContent = '登録済み';
-      // 1.2秒後にモーダルを閉じる
-      setTimeout(() => closeModal(), 300);
+      // ★ FIX: 登録成功後もボタンを有効に戻す（次のページで再利用できるように）
+      setTimeout(() => {
+        closeModal();
+      }, 1200);
     } else {
       throw new Error(data.error || 'エラー');
     }
@@ -595,12 +610,13 @@ async function saveTemplate() {
     regRes.className = 'reg-result err';
     regRes.textContent = '✗ ' + e.message;
     regRes.style.display = 'block';
-    btn.disabled = false; btn.textContent = 'テンプレとして登録';
+    // ★ FIX: エラー時も必ずボタンを有効に戻す
+    btn.disabled = false;
+    btn.textContent = 'テンプレとして登録';
   }
 }
 
 function skipRegister() {
-  // 登録せずにモーダルを閉じる（0.1秒後）
   setTimeout(() => closeModal(), 100);
 }
 </script>
