@@ -85,6 +85,20 @@
 </head>
 <body>
 <h1>帯削除 ＋ 自社帯付け 自動処理</h1>
+
+  <section style="background:#f4f8ff; border:1px solid #cfe0ff; border-radius:8px; padding:14px 18px; margin-bottom:18px;">
+    <h2 style="margin-top:0; font-size:16px;">使い方</h2>
+    <ol style="margin:0; padding-left:20px; font-size:14px; line-height:1.9; color:#333;">
+      <li>貼り付ける<strong>自社帯</strong>を選ぶ（無ければ下の「自社帯の管理」から登録）</li>
+      <li>他社の<strong>案内図（周辺地図）</strong>も消したい場合は「案内図も白塗りする」にチェック ※区画図は消えません</li>
+      <li>処理したい<strong>PDFをドラッグ＆ドロップ</strong>（複数まとめてOK）</li>
+      <li><strong>「処理開始」</strong>を押すと、他社の帯とロゴを自動で消して自社帯を貼ります</li>
+      <li>確認画面で各ページをチェック。<strong>取りこぼしはページをクリック→ドラッグ</strong>して帯の範囲を指定できます</li>
+      <li><strong>「PDFをダウンロード」</strong>で完成したPDFを保存</li>
+    </ol>
+    <p style="margin:10px 0 0; font-size:12px; color:#888;">※ 自動検出が外したページは赤く表示されます。手動で帯を指定して補完してください。</p>
+  </section>
+
   <section>
     <h2>PDF をアップロードして処理</h2>
     {% with messages = get_flashed_messages() %}
@@ -112,7 +126,7 @@
               class="own-band-preview" alt="自社帯プレビュー">
           </div>
         {% else %}
-          <p class="no-band-warn">⚠️ 自社帯が登録されていません。<a href="/bands">テンプレ管理ページ</a>から登録してください。</p>
+          <p class="no-band-warn">⚠️ 自社帯が登録されていません。<a href="/bands">自社帯の管理ページ</a>から登録してください。</p>
         {% endif %}
       </div>
 
@@ -139,36 +153,21 @@
                style="display:none" onchange="onFileInputChange(this)">
       </div>
 
+      <!-- 案内図の白塗りオプション -->
+      <div style="margin-bottom: 16px;">
+        <label style="font-size:14px; cursor:pointer;">
+          <input type="checkbox" id="whiteout-map" name="whiteout_map">
+          案内図（周辺地図）も白塗りする
+        </label>
+        <p style="margin:4px 0 0; font-size:12px; color:#888;">チェックすると他社の案内図を白塗りします（区画図は対象外）。</p>
+      </div>
+
       <button type="submit" id="submit-btn" {% if not own_bands %}disabled{% endif %} disabled>処理開始</button>
     </form>
   </section>
 
   <section>
-    <h2>登録済み 他社帯テンプレ</h2>
-    {% if templates %}
-      {% set companies = [] %}
-      {% for t in templates %}
-        {% set company = t.split('_')[0] if '_' in t else '未分類' %}
-        {% if company not in companies %}
-          {% set _ = companies.append(company) %}
-        {% endif %}
-      {% endfor %}
-      <ul>
-        {% for company in companies %}
-          {% set cnt = [] %}
-          {% for t in templates %}
-            {% if (t.split('_')[0] if '_' in t else '未分類') == company %}
-              {% set _ = cnt.append(t) %}
-            {% endif %}
-          {% endfor %}
-          <li>{{ company }}（{{ cnt|length }}件）</li>
-        {% endfor %}
-      </ul>
-      <p style="font-size:13px;color:#666;">合計 {{ templates|length }} 件登録済み</p>
-    {% else %}
-      <p>まだテンプレが登録されていません。</p>
-    {% endif %}
-    <p><a href="/bands">▶ テンプレ管理ページへ</a></p>
+    <p><a href="/bands">▶ 自社帯の管理（登録・削除）へ</a></p>
   </section>
 
 <script>
@@ -249,6 +248,9 @@
     // own_band
     const ownBandSelect = document.getElementById('own-band-select');
     if (ownBandSelect) fd.append('own_band', ownBandSelect.value);
+
+    // 案内図を白塗りするか
+    fd.append('whiteout_map', document.getElementById('whiteout-map').checked ? '1' : '0');
 
     // 全PDFファイルを同じキー名で追加
     selectedFiles.forEach(f => fd.append('pdf_file', f));

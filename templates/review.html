@@ -75,6 +75,12 @@
     border-radius: 10px; padding: 20px 24px; margin-bottom: 32px;
   }
 
+  .reorder-hint {
+    background: #eef4ff; border: 1.5px solid #c4d6f0; border-radius: 8px;
+    padding: 12px 18px; font-size: 0.84rem; color: #335; line-height: 1.7;
+    margin-bottom: 20px;
+  }
+
   .thumb-grid {
     display: flex;
     flex-wrap: wrap;
@@ -83,11 +89,21 @@
   }
   .thumb-card {
     background: #fff; border-radius: 8px; overflow: hidden;
-    box-shadow: var(--shadow); cursor: pointer;
-    transition: transform 0.15s, box-shadow 0.15s;
+    box-shadow: var(--shadow); cursor: grab;
+    transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
     border: 2.5px solid transparent; position: relative;
     width: 150px;
     flex-shrink: 0;
+  }
+  .thumb-card:active { cursor: grabbing; }
+  .thumb-card.dragging { opacity: 0.4; }
+  .thumb-card.drag-over { box-shadow: -4px 0 0 0 #2255cc; }
+  .order-num {
+    position: absolute; top: 6px; left: 6px; z-index: 2;
+    background: rgba(26,23,20,0.82); color: #fff;
+    font-size: 0.7rem; font-weight: 700; min-width: 20px; height: 20px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 5px; padding: 0 5px;
   }
   .thumb-card.landscape { width: 220px; }
   .thumb-card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.14); }
@@ -164,6 +180,20 @@
     border-top: 3px solid #e8a020; border-bottom: 3px solid #e8a020;
     background: rgba(232,160,32,0.2); display: none;
   }
+  /* 白塗りモードでは2D枠（赤）で表示 */
+  #sel-overlay.whiteout {
+    right: auto; border: 3px solid #c84b2f;
+    background: rgba(200,75,47,0.18);
+  }
+
+  /* モード切替トグル */
+  .mode-toggle { display: flex; gap: 0; border: 1.5px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .mode-toggle button {
+    flex: 1; padding: 9px 6px; border: none; background: #fff; cursor: pointer;
+    font-size: 0.8rem; font-weight: 700; color: var(--text-muted); transition: all 0.15s;
+  }
+  .mode-toggle button + button { border-left: 1.5px solid var(--border); }
+  .mode-toggle button.active { background: var(--text); color: #fff; }
 
   .modal-panel {
     width: 210px; flex-shrink: 0; border-left: 1px solid var(--border);
@@ -207,48 +237,6 @@
   .apply-result.ok  { background: var(--ok-light); color: var(--ok); }
   .apply-result.err { background: var(--miss-light); color: var(--miss); }
 
-  /* テンプレ登録UI */
-  .register-box {
-    display: none;
-    background: #f0f4ff; border: 1.5px solid #9ab0e8;
-    border-radius: 8px; padding: 12px;
-    flex-direction: column; gap: 8px;
-  }
-  .register-box.open { display: flex; }
-  .register-box .reg-label {
-    font-size: 0.73rem; font-weight: 700; color: #334488;
-    letter-spacing: 0.05em;
-  }
-  .register-box input[type=text] {
-    width: 100%; padding: 7px 9px; border: 1px solid #c0cce8;
-    border-radius: 5px; font-size: 0.82rem; outline: none;
-    font-family: inherit;
-  }
-  .register-box input:focus { border-color: #6688cc; }
-  .reg-color-row {
-    display: flex; align-items: center; gap: 6px;
-    font-size: 0.76rem; color: #334488;
-  }
-  .btn-register {
-    background: #3355bb; color: #fff; border: none;
-    padding: 9px 12px; border-radius: 6px; font-size: 0.84rem;
-    font-weight: 700; cursor: pointer; width: 100%;
-    transition: background 0.15s;
-  }
-  .btn-register:hover:not(:disabled) { background: #2244aa; }
-  .btn-register:disabled { background: #aaa; cursor: not-allowed; }
-  .btn-skip-reg {
-    background: none; border: none; color: #7a8aaa;
-    font-size: 0.76rem; cursor: pointer; text-decoration: underline;
-    text-align: center; padding: 2px;
-  }
-  .reg-result {
-    font-size: 0.76rem; padding: 6px 8px; border-radius: 4px;
-    text-align: center; display: none;
-  }
-  .reg-result.ok  { background: #ddeeff; color: #224488; }
-  .reg-result.err { background: var(--miss-light); color: var(--miss); }
-
   .spinner {
     width: 15px; height: 15px;
     border: 2.5px solid rgba(255,255,255,0.4); border-top-color: #fff;
@@ -262,8 +250,8 @@
 <header>
   <span class="logo">帯付けくん — 確認・修正</span>
   <div class="header-right">
-    <span class="stat-badge stat-miss" id="hdr-miss">未検出 {{ missed_pages|length }}ページ</span>
-    <span class="stat-badge stat-ok" id="hdr-ok">検出済 {{ ok_pages|length }}ページ</span>
+    <span class="stat-badge stat-miss" id="hdr-miss">未検出 {{ missed_count }}ページ</span>
+    <span class="stat-badge stat-ok" id="hdr-ok">検出済 {{ ok_count }}ページ</span>
     <a href="/download/{{ job_id }}" class="btn-download">⬇ PDFをダウンロード</a>
     <a href="/" class="btn-back-top">◀ トップに戻る</a>
   </div>
@@ -271,45 +259,26 @@
 
 <main>
 
-  {% if not missed_pages %}
-  <div class="all-ok-banner">✅ 全ページの帯を自動検出しました。確認してダウンロードしてください。</div>
-  {% else %}
-  <div class="section-missed">
-    <div class="section-title">⚠ 帯未検出 — クリックして手動で帯付けしてください</div>
-    <div class="thumb-grid">
-      {% for p in missed_pages %}
-      <div class="thumb-card missed" id="card-{{ p.page_index }}"
-           onclick="openModal({{ p.page_index }}, '{{ p.page_label }}', true)">
-        <div class="thumb-img-wrap">
-          <img src="/thumb_all/{{ job_id }}/{{ p.page_index }}" id="thumb-{{ p.page_index }}" alt="{{ p.page_label }}"
-               onload="setCardOrientation(this, 'card-{{ p.page_index }}')">
-          <div class="thumb-status status-miss" id="badge-{{ p.page_index }}">未検出</div>
-        </div>
-        <div class="thumb-label" id="label-{{ p.page_index }}">{{ p.page_label }}</div>
-      </div>
-      {% endfor %}
-    </div>
+  <div class="reorder-hint">
+    🔀 カードを<b>ドラッグ</b>すると出力PDFのページ順を入れ替えられます。
+    カードを<b>クリック</b>すると帯の確認・修正ができます（赤＝帯未検出）。
   </div>
-  {% endif %}
 
-  {% if ok_pages %}
-  <div class="section-ok">
-    <div class="section-title">✓ 自動検出済みページ（クリックで確認・修正）</div>
-    <div class="thumb-grid">
-      {% for p in ok_pages %}
-      <div class="thumb-card ok" id="card-{{ p.page_index }}"
-           onclick="openModal({{ p.page_index }}, '{{ p.page_label }}', false)">
-        <div class="thumb-img-wrap">
-          <img src="/thumb_all/{{ job_id }}/{{ p.page_index }}" id="thumb-{{ p.page_index }}" alt="{{ p.page_label }}"
-               onload="setCardOrientation(this, 'card-{{ p.page_index }}')">
-          <div class="thumb-status status-ok" id="badge-{{ p.page_index }}">検出済</div>
-        </div>
-        <div class="thumb-label" id="label-{{ p.page_index }}">{{ p.page_label }}</div>
+  <div class="thumb-grid" id="page-grid">
+    {% for p in pages %}
+    <div class="thumb-card {{ 'missed' if p.missed else 'ok' }}" id="card-{{ p.page_index }}"
+         draggable="true" data-page="{{ p.page_index }}"
+         onclick="openModal({{ p.page_index }}, '{{ p.page_label }}', {{ 'true' if p.missed else 'false' }})">
+      <div class="order-num" id="ordnum-{{ p.page_index }}">{{ loop.index }}</div>
+      <div class="thumb-img-wrap">
+        <img src="/thumb_all/{{ job_id }}/{{ p.page_index }}" id="thumb-{{ p.page_index }}" alt="{{ p.page_label }}"
+             onload="setCardOrientation(this, 'card-{{ p.page_index }}')" draggable="false">
+        <div class="thumb-status {{ 'status-miss' if p.missed else 'status-ok' }}" id="badge-{{ p.page_index }}">{{ '未検出' if p.missed else '検出済' }}</div>
       </div>
-      {% endfor %}
+      <div class="thumb-label" id="label-{{ p.page_index }}">{{ p.page_label }}</div>
     </div>
+    {% endfor %}
   </div>
-  {% endif %}
 
 </main>
 
@@ -336,10 +305,17 @@
       </div>
       <div class="modal-panel">
         <div>
+          <div class="panel-label">モード</div>
+          <div class="mode-toggle">
+            <button type="button" id="mode-band" class="active" onclick="setMode('band')">帯を貼る</button>
+            <button type="button" id="mode-whiteout" onclick="setMode('whiteout')">白塗りのみ</button>
+          </div>
+        </div>
+        <div>
           <div class="panel-label">操作方法</div>
-          <div class="instruction-box">
-            画像の上でドラッグして帯の範囲を選択してください。<br><br>
-            黄色い枠が帯位置になります。
+          <div class="instruction-box" id="instruction-box">
+            画像の上で<b>縦方向にドラッグ</b>すると帯の位置・高さを指定できます。<br>
+            帯は横幅いっぱいに貼られます。
           </div>
         </div>
         <div>
@@ -356,21 +332,6 @@
           <button class="btn-cancel-modal" onclick="closeModal()">キャンセル</button>
         </div>
         <div class="apply-result" id="apply-result"></div>
-
-        <!-- テンプレ登録ボックス（貼り付け成功後に表示） -->
-        <div class="register-box" id="register-box">
-          <div class="reg-label">📋 このテンプレを登録しますか？</div>
-          <input type="text" id="tmpl-name-input" placeholder="会社名（例: アーネストワン）" maxlength="40">
-          <label class="reg-color-row">
-            <input type="checkbox" id="reg-color-check">
-            カラーモードで登録
-          </label>
-          <button class="btn-register" id="btn-register" onclick="saveTemplate()">
-            テンプレとして登録
-          </button>
-          <button class="btn-skip-reg" onclick="skipRegister()">登録しない（このまま閉じる）</button>
-          <div class="reg-result" id="reg-result"></div>
-        </div>
       </div>
     </div>
   </div>
@@ -378,49 +339,59 @@
 
 <script>
 const JOB_ID = "{{ job_id }}";
+const PAGE_DATA = {{ page_data|tojson }};  // idx -> [[y0_ratio, y1_ratio], ...]
 let curPage = null, curMissed = false;
+let curMode = 'band';  // 'band'=帯を貼る / 'whiteout'=白塗りのみ
 let selY0 = null, selY1 = null;
-let dragging = false, dragStart = null;
-let pendingReg = null;
+let selX0 = null, selX1 = null;
+let dragging = false, dragStartY = null, dragStartX = null;
+let pendingPrefill = null;  // 画像ロード後に初期表示する帯位置(比率)
 
 const modalEl  = document.getElementById('modal');
 const imgEl    = document.getElementById('modal-img');
 const wrap     = document.getElementById('page-canvas-wrap');
 const selOv    = document.getElementById('sel-overlay');
 
+function setMode(mode) {
+  curMode = mode;
+  document.getElementById('mode-band').classList.toggle('active', mode === 'band');
+  document.getElementById('mode-whiteout').classList.toggle('active', mode === 'whiteout');
+  document.getElementById('instruction-box').innerHTML = mode === 'band'
+    ? '画像の上で<b>縦方向にドラッグ</b>すると帯の位置・高さを指定できます。<br>帯は横幅いっぱいに貼られます。'
+    : '消したい部分を<b>四角く囲むようにドラッグ</b>すると、その範囲だけ白塗りします。<br>ロゴ・案内図の消し残しに使えます。';
+  document.getElementById('btn-text').textContent = mode === 'band' ? '帯を貼り付け' : '白塗りする';
+  resetSel();
+}
+
 function openModal(idx, label, isMissed) {
   curPage = idx; curMissed = isMissed;
-  selY0 = selY1 = null;
+  selY0 = selY1 = selX0 = selX1 = null;
+  setMode('band');  // 開くたびに帯モードへ戻す
   document.getElementById('modal-title').textContent = label + (isMissed ? ' — 手動帯付け' : ' — 確認・修正');
-  imgEl.src = `/page_img/${JOB_ID}/${idx}?t=${Date.now()}`;
   resetSel();
+  // 既存の帯があれば最下部の帯を初期選択として表示する
+  const bands = PAGE_DATA[idx] || [];
+  pendingPrefill = bands.length ? bands[bands.length - 1] : null;
   document.getElementById('apply-result').style.display = 'none';
-
-  // ★ FIX: モーダルを開くたびに登録ボックスとボタンをリセット
-  resetRegisterBox();
-
   modalEl.classList.add('open');
+  imgEl.src = `/page_img/${JOB_ID}/${idx}?t=${Date.now()}`;
 }
 
-function resetRegisterBox() {
-  const regBox = document.getElementById('register-box');
-  const btnReg = document.getElementById('btn-register');
-  const regRes = document.getElementById('reg-result');
-  regBox.classList.remove('open');
-  regRes.style.display = 'none';
-  regRes.textContent = '';
-  document.getElementById('tmpl-name-input').value = '';
-  document.getElementById('reg-color-check').checked = false;
-  // ★ FIX: ボタンを必ず有効な状態に戻す
-  btnReg.disabled = false;
-  btnReg.textContent = 'テンプレとして登録';
-  pendingReg = null;
-}
+// 画像ロード完了後に初期の帯位置を枠で表示
+imgEl.addEventListener('load', () => {
+  if (!modalEl.classList.contains('open') || !pendingPrefill) return;
+  const h = imgEl.getBoundingClientRect().height;
+  selY0 = pendingPrefill[0] * h;
+  selY1 = pendingPrefill[1] * h;
+  pendingPrefill = null;
+  showSel();
+  updateRange();
+  document.getElementById('btn-apply').disabled = false;
+});
 
 function closeModal() {
   modalEl.classList.remove('open');
   curPage = null; curMissed = false;
-  resetRegisterBox();
 }
 
 function overlayClick(e) { if (e.target === modalEl) closeModal(); }
@@ -432,6 +403,11 @@ function imgY(e) {
   const cy = e.touches ? e.touches[0].clientY : e.clientY;
   return Math.max(0, Math.min(cy - r.top, r.height));
 }
+function imgX(e) {
+  const r = imgEl.getBoundingClientRect();
+  const cx = e.touches ? e.touches[0].clientX : e.clientX;
+  return Math.max(0, Math.min(cx - r.left, r.width));
+}
 
 wrap.addEventListener('mousedown', startDrag);
 wrap.addEventListener('touchstart', startDrag, {passive: false});
@@ -439,8 +415,12 @@ wrap.addEventListener('touchstart', startDrag, {passive: false});
 function startDrag(e) {
   e.preventDefault();
   dragging = true;
-  dragStart = imgY(e);
-  selY0 = selY1 = dragStart;
+  dragStartY = imgY(e);
+  selY0 = selY1 = dragStartY;
+  if (curMode === 'whiteout') {
+    dragStartX = imgX(e);
+    selX0 = selX1 = dragStartX;
+  }
   showSel();
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', endDrag);
@@ -450,8 +430,13 @@ function startDrag(e) {
 function onMove(e) {
   if (!dragging) return; e.preventDefault();
   const y = imgY(e);
-  selY0 = Math.min(dragStart, y);
-  selY1 = Math.max(dragStart, y);
+  selY0 = Math.min(dragStartY, y);
+  selY1 = Math.max(dragStartY, y);
+  if (curMode === 'whiteout') {
+    const x = imgX(e);
+    selX0 = Math.min(dragStartX, x);
+    selX1 = Math.max(dragStartX, x);
+  }
   showSel();
 }
 function endDrag() {
@@ -460,7 +445,9 @@ function endDrag() {
   document.removeEventListener('mouseup', endDrag);
   document.removeEventListener('touchmove', onMove);
   document.removeEventListener('touchend', endDrag);
-  if (selY1 - selY0 < 5) { resetSel(); return; }
+  const tooSmall = (selY1 - selY0 < 5) ||
+                   (curMode === 'whiteout' && (selX1 - selX0 < 5));
+  if (tooSmall) { resetSel(); return; }
   updateRange();
   document.getElementById('btn-apply').disabled = false;
 }
@@ -469,30 +456,54 @@ function showSel() {
   const r = imgEl.getBoundingClientRect();
   const wR = wrap.getBoundingClientRect();
   const offTop = r.top - wR.top;
+  const offLeft = r.left - wR.left;
   selOv.style.display = 'block';
   selOv.style.top = (offTop + selY0) + 'px';
   selOv.style.height = (selY1 - selY0) + 'px';
+  if (curMode === 'whiteout') {
+    selOv.classList.add('whiteout');
+    selOv.style.left = (offLeft + selX0) + 'px';
+    selOv.style.width = (selX1 - selX0) + 'px';
+  } else {
+    selOv.classList.remove('whiteout');
+    selOv.style.left = '0';
+    selOv.style.width = '';
+  }
 }
 function resetSel() {
   selOv.style.display = 'none';
-  selY0 = selY1 = null;
+  selOv.classList.remove('whiteout');
+  selY0 = selY1 = selX0 = selX1 = null;
   document.getElementById('range-display').innerHTML = '<span class="muted">未選択</span>';
   document.getElementById('btn-apply').disabled = true;
 }
 function updateRange() {
-  const h = imgEl.getBoundingClientRect().height;
+  const rect = imgEl.getBoundingClientRect();
+  const h = rect.height, w = rect.width;
   const r0 = (selY0/h*100).toFixed(1);
   const r1 = (selY1/h*100).toFixed(1);
-  document.getElementById('range-display').innerHTML =
-    `上端: ${r0}%<br>下端: ${r1}%<br><span class="muted">高さ: ${(r1-r0).toFixed(1)}%</span>`;
+  if (curMode === 'whiteout') {
+    const c0 = (selX0/w*100).toFixed(1);
+    const c1 = (selX1/w*100).toFixed(1);
+    document.getElementById('range-display').innerHTML =
+      `縦: ${r0}% 〜 ${r1}%<br>横: ${c0}% 〜 ${c1}%<br><span class="muted">この範囲を白塗り</span>`;
+  } else {
+    document.getElementById('range-display').innerHTML =
+      `上端: ${r0}%<br>下端: ${r1}%<br><span class="muted">高さ: ${(r1-r0).toFixed(1)}%</span>`;
+  }
 }
 
-// 帯貼り付けAPI
+// 帯貼り付け／白塗りAPI
 async function applyBand() {
   if (selY0 === null || curPage === null) return;
-  const h = imgEl.getBoundingClientRect().height;
+  const rect = imgEl.getBoundingClientRect();
+  const h = rect.height, w = rect.width;
   const y0_ratio = selY0 / h;
   const y1_ratio = selY1 / h;
+  // 帯モードは全幅、白塗りモードは選択範囲の横幅
+  const x0_ratio = curMode === 'whiteout' ? selX0 / w : 0;
+  const x1_ratio = curMode === 'whiteout' ? selX1 / w : 1;
+  const defaultLabel = curMode === 'band' ? '帯を貼り付け' : '白塗りする';
 
   const btn = document.getElementById('btn-apply');
   const sp  = document.getElementById('spinner');
@@ -506,20 +517,22 @@ async function applyBand() {
     const r = await fetch(`/manual_band/${JOB_ID}/${curPage}`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({y0_ratio, y1_ratio})
+      body: JSON.stringify({mode: curMode, y0_ratio, y1_ratio, x0_ratio, x1_ratio})
     });
     const data = await r.json();
 
     if (data.ok) {
       const ts = data.ts;
+      // 帯モードで貼った場合のみ次回の初期帯位置を更新（白塗りは帯位置に影響しない）
+      if (curMode === 'band') PAGE_DATA[curPage] = [[y0_ratio, y1_ratio]];
       const th = document.getElementById(`thumb-${curPage}`);
       if (th) th.src = `/thumb_all/${JOB_ID}/${curPage}?t=${ts}`;
       imgEl.src = `/page_img/${JOB_ID}/${curPage}?t=${ts}`;
       resetSel();
 
-      // カード更新
+      // カード更新（帯モードで未検出を解消した場合のみ「手動」表示に変更）
       const card = document.getElementById(`card-${curPage}`);
-      if (card) {
+      if (card && curMode === 'band') {
         card.classList.remove('missed'); card.classList.add('manually-done');
         const badge = document.getElementById(`badge-${curPage}`);
         if (badge) { badge.className = 'thumb-status status-manual'; badge.textContent = '手動'; }
@@ -528,19 +541,12 @@ async function applyBand() {
       }
       updateCounts();
 
-      sp.style.display = 'none'; txt.textContent = '帯を貼り付け'; btn.disabled = false;
-
-      if (curMissed) {
-        pendingReg = { page_index: curPage, y0_ratio, y1_ratio };
-        res.className = 'apply-result ok'; res.textContent = '✓ 帯を貼り付けました';
-        res.style.display = 'block';
-        document.getElementById('register-box').classList.add('open');
-        document.getElementById('tmpl-name-input').focus();
-      } else {
-        res.className = 'apply-result ok'; res.textContent = '✓ 修正しました';
-        res.style.display = 'block';
-        setTimeout(() => closeModal(), 300);
-      }
+      res.className = 'apply-result ok';
+      res.textContent = curMode === 'whiteout' ? '✓ 白塗りしました'
+                        : (curMissed ? '✓ 帯を貼り付けました' : '✓ 修正しました');
+      res.style.display = 'block';
+      // 白塗りは続けて作業することが多いのでモーダルは閉じない
+      if (curMode === 'band') setTimeout(() => closeModal(), 400);
       return;
     } else {
       throw new Error(data.error || 'エラー');
@@ -549,7 +555,7 @@ async function applyBand() {
     res.className = 'apply-result err'; res.textContent = '✗ ' + e.message;
   } finally {
     res.style.display = 'block';
-    sp.style.display = 'none'; txt.textContent = '帯を貼り付け'; btn.disabled = false;
+    sp.style.display = 'none'; txt.textContent = defaultLabel; btn.disabled = false;
   }
 }
 
@@ -567,58 +573,57 @@ function setCardOrientation(imgEl, cardId) {
   }
 }
 
-async function saveTemplate() {
-  if (!pendingReg) return;
-  const name = document.getElementById('tmpl-name-input').value.trim();
-  if (!name) {
-    document.getElementById('tmpl-name-input').focus();
-    return;
-  }
-  const useColor = document.getElementById('reg-color-check').checked;
+// ===== ページ並べ替え（ドラッグ＆ドロップ） =====
+const grid = document.getElementById('page-grid');
+let dragSrc = null;
 
-  const btn = document.getElementById('btn-register');
-  const regRes = document.getElementById('reg-result');
-  btn.disabled = true; btn.textContent = '登録中…';
+function initDragDrop() {
+  grid.querySelectorAll('.thumb-card').forEach(card => {
+    card.addEventListener('dragstart', e => {
+      dragSrc = card;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', card.dataset.page); } catch (_) {}
+    });
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+      dragSrc = null;
+      saveOrder();
+    });
+    // ドラッグ中はカードをリアルタイムに差し込んで順序を入れ替える
+    card.addEventListener('dragover', e => {
+      e.preventDefault();
+      if (!dragSrc || card === dragSrc) return;
+      const r = card.getBoundingClientRect();
+      const before = e.clientX < r.left + r.width / 2;
+      grid.insertBefore(dragSrc, before ? card : card.nextSibling);
+    });
+  });
+}
 
-  try {
-    const r = await fetch('/save_band_from_review', {
+function renumber() {
+  [...grid.querySelectorAll('.thumb-card')].forEach((card, i) => {
+    const n = card.querySelector('.order-num');
+    if (n) n.textContent = i + 1;
+  });
+}
+
+let saveTimer = null;
+function saveOrder() {
+  renumber();
+  const order = [...grid.querySelectorAll('.thumb-card')].map(c => parseInt(c.dataset.page, 10));
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    fetch(`/reorder/${JOB_ID}`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        job_id: JOB_ID,
-        page_index: pendingReg.page_index,
-        y0_ratio: pendingReg.y0_ratio,
-        y1_ratio: pendingReg.y1_ratio,
-        template_name: name,
-        use_color: useColor,
-      })
-    });
-    const data = await r.json();
-    if (data.ok) {
-      regRes.className = 'reg-result ok';
-      regRes.textContent = `✓ 「${data.name}」として登録しました`;
-      regRes.style.display = 'block';
-      btn.textContent = '登録済み';
-      // ★ FIX: 登録成功後もボタンを有効に戻す（次のページで再利用できるように）
-      setTimeout(() => {
-        closeModal();
-      }, 1200);
-    } else {
-      throw new Error(data.error || 'エラー');
-    }
-  } catch(e) {
-    regRes.className = 'reg-result err';
-    regRes.textContent = '✗ ' + e.message;
-    regRes.style.display = 'block';
-    // ★ FIX: エラー時も必ずボタンを有効に戻す
-    btn.disabled = false;
-    btn.textContent = 'テンプレとして登録';
-  }
+      body: JSON.stringify({order})
+    }).catch(() => {});
+  }, 150);
 }
 
-function skipRegister() {
-  setTimeout(() => closeModal(), 100);
-}
+initDragDrop();
+
 </script>
 </body>
 </html>

@@ -28,3 +28,4 @@ uploads/
 processed/
 *.pdf
 outputs/
+training_images/

@@ -2,5 +2,9 @@ flask
 gunicorn
 pymupdf
 pillow
-scikit-image
 numpy
+# YOLO推論用。torchはCPU版を明示（HF Spacesの無料CPU環境向け・GPU不要で軽量）
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
+ultralytics
