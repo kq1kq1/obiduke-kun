@@ -26,6 +26,9 @@ CONF_THRESHOLD = 0.30
 
 _model = None
 _model_lock = threading.Lock()
+# 推論は1件ずつに直列化する。複数ユーザーが同時に処理開始しても
+# 共有モデルへの同時predict（thread-unsafe）を避け、結果の破損を防ぐ。
+_infer_lock = threading.Lock()
 
 
 def _get_model():
@@ -54,7 +57,8 @@ def warmup():
     from PIL import Image
     model = _get_model()
     dummy = Image.new("RGB", (IMGSZ, IMGSZ), "white")
-    model.predict(dummy, imgsz=IMGSZ, conf=CONF_THRESHOLD, verbose=False)
+    with _infer_lock:
+        model.predict(dummy, imgsz=IMGSZ, conf=CONF_THRESHOLD, verbose=False)
 
 
 def detect_objects(pil_img):
@@ -64,7 +68,9 @@ def detect_objects(pil_img):
     座標は入力画像のピクセル。clsは 'band' / 'logo' / 'map'。
     """
     model = _get_model()
-    results = model.predict(pil_img, imgsz=IMGSZ, conf=CONF_THRESHOLD, verbose=False)
+    # 共有モデルへの同時predictを避けるため1件ずつ実行する
+    with _infer_lock:
+        results = model.predict(pil_img, imgsz=IMGSZ, conf=CONF_THRESHOLD, verbose=False)
     out = []
     if not results:
         return out
