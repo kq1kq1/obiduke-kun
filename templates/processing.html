@@ -52,6 +52,16 @@
     const thumbGrid = document.getElementById("thumb-grid");
     const intervalMs = 500;
 
+    // ETA計算用：実際にページ処理が始まった時刻と、その時点の完了数を記録する
+    let procStartTs = null;
+    let procStartCurrent = 0;
+
+    function fmtDur(sec) {
+      sec = Math.max(0, Math.round(sec));
+      const m = Math.floor(sec / 60), s = sec % 60;
+      return m > 0 ? `${m}分${s}秒` : `${s}秒`;
+    }
+
     function buildDownloadUrl() {
       return `/download/${encodeURIComponent(jobId)}`;
     }
@@ -83,7 +93,28 @@
           const current = p.current || 0;
           const pct = total ? Math.floor((current / total) * 100) : 0;
           bar.style.width = `${pct}%`;
-          txt.textContent = `処理中：${current} / ${total} ページ（${pct}%）`;
+
+          // まだ1ページも進んでいない＝ページ数集計やモデル起動の準備中
+          if (total === 0 || current === 0) {
+            txt.textContent = "モデルを準備中…（まもなく開始します）";
+            procStartTs = null;
+            return;
+          }
+
+          // 処理開始時点を基準に「秒/ページ」を出して残り時間を推定する
+          if (procStartTs === null) {
+            procStartTs = Date.now();
+            procStartCurrent = current;
+          }
+          let etaStr = "";
+          const doneSinceStart = current - procStartCurrent;
+          if (doneSinceStart >= 1) {
+            const elapsed = (Date.now() - procStartTs) / 1000;
+            const rate = elapsed / doneSinceStart;           // 秒/ページ
+            const remain = rate * (total - current);
+            etaStr = `　／　残り約 ${fmtDur(remain)}`;
+          }
+          txt.textContent = `処理中：${current} / ${total} ページ（${pct}%）${etaStr}`;
           return;
         }
 

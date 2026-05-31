@@ -163,6 +163,14 @@
       </div>
 
       <button type="submit" id="submit-btn" {% if not own_bands %}disabled{% endif %} disabled>処理開始</button>
+
+      <!-- アップロード進捗 -->
+      <div id="upload-progress" style="display:none; margin-top:14px;">
+        <div style="height:14px; background:#eee; border-radius:999px; overflow:hidden;">
+          <div id="upload-bar" style="height:100%; width:0; background:#222; transition:width .15s;"></div>
+        </div>
+        <p id="upload-text" style="font-size:13px; color:#555; margin:6px 0 0;">アップロード中… 0%</p>
+      </div>
     </form>
   </section>
 
@@ -255,28 +263,47 @@
     // 全PDFファイルを同じキー名で追加
     selectedFiles.forEach(f => fd.append('pdf_file', f));
 
-    // 送信ボタンを無効化してprocessingページへ遷移
+    // 送信ボタンを無効化
     const btn = document.getElementById('submit-btn');
     btn.disabled = true;
     btn.textContent = '送信中...';
 
-    fetch('/process', { method: 'POST', body: fd })
-      .then(res => res.json())
-      .then(data => {
-        // job_idを受け取ったら即座にprocessing画面へ遷移
-        if (data.job_id) {
-          window.location.href = data.redirect;
-        } else {
-          alert('エラー: ' + (data.error || '不明なエラー'));
-          btn.disabled = false;
-          btn.textContent = '処理開始';
-        }
-      })
-      .catch(err => {
-        alert('送信エラー: ' + err);
-        btn.disabled = false;
-        btn.textContent = '処理開始';
-      });
+    // アップロード進捗を表示する（XHRならupload.onprogressで取れる）
+    const progWrap = document.getElementById('upload-progress');
+    const progBar = document.getElementById('upload-bar');
+    const progText = document.getElementById('upload-text');
+    progWrap.style.display = 'block';
+    progBar.style.width = '0%';
+    progText.textContent = 'アップロード中… 0%';
+
+    const resetBtn = () => { btn.disabled = false; btn.textContent = '処理開始'; progWrap.style.display = 'none'; };
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/process');
+
+    // アップロード進捗
+    xhr.upload.onprogress = e => {
+      if (!e.lengthComputable) return;
+      const pct = Math.floor(e.loaded / e.total * 100);
+      progBar.style.width = pct + '%';
+      progText.textContent = `アップロード中… ${pct}%`;
+      // 送信完了後はサーバ側の受け取り・準備待ち
+      if (pct >= 100) progText.textContent = 'サーバーで準備中…';
+    };
+
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch (_) {}
+      if (xhr.status === 200 && data.job_id) {
+        progText.textContent = '処理を開始します…';
+        window.location.href = data.redirect;
+      } else {
+        alert('エラー: ' + (data.error || ('送信失敗 (HTTP ' + xhr.status + ')')));
+        resetBtn();
+      }
+    };
+    xhr.onerror = () => { alert('送信エラー: 通信に失敗しました'); resetBtn(); };
+    xhr.send(fd);
   });
 
   // ドラッグ＆ドロップ
