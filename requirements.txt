@@ -8,3 +8,5 @@ numpy
 torch
 torchvision
 ultralytics
+# Intel CPUでの推論高速化（best_openvino_modelの実行に必要）
+openvino>=2024.0.0

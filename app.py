@@ -290,6 +290,10 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "obiduke-kun-secret")
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024  # 300MBまで
 
+# 起動時にモデルを先読み＆コンパイル（OpenVINOの初回コンパイルは数十秒かかるため）。
+# サーバ起動はブロックしないよう別スレッドで実行する。
+threading.Thread(target=detect.warmup, daemon=True).start()
+
 
 @app.route("/")
 def index():
