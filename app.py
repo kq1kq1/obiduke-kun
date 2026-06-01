@@ -414,6 +414,22 @@ def _load_order(job_id, default_indices):
     return valid
 
 
+def _deleted_path(job_id):
+    return os.path.join(DIR_OUTPUT, job_id + "_deleted.json")
+
+
+def _load_deleted(job_id):
+    """削除指定されたpage_indexの集合を返す。無ければ空。"""
+    path = _deleted_path(job_id)
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            pass
+    return set()
+
+
 @app.route("/review/<job_id>")
 def review(job_id):
     meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
@@ -422,14 +438,15 @@ def review(job_id):
     with open(meta_path, encoding="utf-8") as f:
         page_results = json.load(f)
 
-    # 保存された並び順に従って1列に並べる（未検出/検出済は色分けで区別）
+    # 保存された並び順に従って1列に並べる（削除指定ページは除外）
     default_order = [p["page_index"] for p in page_results]
     order = _load_order(job_id, default_order)
+    deleted = _load_deleted(job_id)
     by_index = {p["page_index"]: p for p in page_results}
-    pages = [by_index[i] for i in order if i in by_index]
+    pages = [by_index[i] for i in order if i in by_index and i not in deleted]
 
-    missed_count = sum(1 for p in page_results if p["missed"])
-    ok_count = len(page_results) - missed_count
+    missed_count = sum(1 for p in pages if p["missed"])
+    ok_count = len(pages) - missed_count
 
     # 各ページの全検出枠を比率で渡す（モーダルのボックスエディタで編集可能にする）
     page_data = {}
@@ -470,6 +487,25 @@ def reorder(job_id):
     try:
         with open(_order_path(job_id), "w", encoding="utf-8") as f:
             json.dump(order, f)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True})
+
+
+@app.route("/set_deleted/<job_id>", methods=["POST"])
+def set_deleted(job_id):
+    """削除ページを保存する。{deleted: [page_index, ...]} を受け取り全置き換え。"""
+    data = request.get_json(silent=True) or {}
+    deleted = data.get("deleted")
+    if not isinstance(deleted, list):
+        return jsonify({"error": "指定が不正です"}), 400
+    try:
+        deleted = [int(i) for i in deleted]
+    except (TypeError, ValueError):
+        return jsonify({"error": "指定が不正です"}), 400
+    try:
+        with open(_deleted_path(job_id), "w", encoding="utf-8") as f:
+            json.dump(deleted, f)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return jsonify({"ok": True})
@@ -589,11 +625,14 @@ def download(job_id):
     with open(meta_path, encoding="utf-8") as f:
         meta = json.load(f)
 
-    # 保存された並び順に従って結合する
+    # 保存された並び順に従って結合する（削除指定ページは除外）
     default_order = [p["page_index"] for p in meta]
     order = _load_order(job_id, default_order)
+    deleted = _load_deleted(job_id)
     pages = []
     for idx in order:
+        if idx in deleted:
+            continue
         img_path = os.path.join(pages_dir, f"page_{idx}.jpg")
         if os.path.exists(img_path):
             pages.append(Image.open(img_path).convert("RGB"))
