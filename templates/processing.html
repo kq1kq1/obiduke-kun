@@ -81,12 +81,18 @@
       });
     }
 
+    // 一過性の通信失敗で赤エラーを出さないため、連続失敗回数で判定する
+    let errCount = 0;
+
     async function tick() {
       try {
         const res = await fetch(`/progress?job_id=${jobId}`, { cache: "no-store" });
         if (!res.ok) throw new Error(`progress fetch failed: ${res.status}`);
         const p = await res.json();
         if (p.job_id && jobId && p.job_id !== jobId) return;
+        // 取得成功：失敗カウントをリセットしてエラー表示を消す
+        errCount = 0;
+        if (err.textContent) err.textContent = "";
 
         if (p.status === "running") {
           const total = p.total || 0;
@@ -138,7 +144,12 @@
           return;
         }
       } catch (e) {
-        err.textContent = String(e);
+        // 一過性の失敗（サーバが推論で一瞬詰まった等）は無視し、
+        // 連続して失敗したときだけエラーを表示する
+        errCount++;
+        if (errCount >= 4) {
+          err.textContent = "通信が不安定です。処理は継続中の可能性があります…（自動再試行中）";
+        }
       }
     }
     tick();
