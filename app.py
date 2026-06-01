@@ -256,6 +256,7 @@ def process_job(job_id, in_paths, own_band_path, whiteout_map=False):
                         "page_index": abs_idx,
                         "page_label": f"{abs_idx + 1}ページ目",
                         "missed": is_missed,
+                        "img_w": img_w,
                         "img_h": img_h,
                         "detections": detections,
                     }
@@ -403,14 +404,18 @@ def review(job_id):
     missed_count = sum(1 for p in page_results if p["missed"])
     ok_count = len(page_results) - missed_count
 
-    # 各ページの現在の帯位置を比率で渡す（モーダルで初期表示し、上下調整しやすくする）
+    # 各ページの全検出枠を比率で渡す（モーダルのボックスエディタで編集可能にする）
     page_data = {}
     for p in page_results:
         h = p.get("img_h") or 1
+        w = p.get("img_w") or 1
         page_data[p["page_index"]] = [
-            [round(d["y0"] / h, 4), round(d["y1"] / h, 4)]
+            {
+                "cls": d.get("cls", "band"),
+                "x0": round(d["x0"] / w, 4), "y0": round(d["y0"] / h, 4),
+                "x1": round(d["x1"] / w, 4), "y1": round(d["y1"] / h, 4),
+            }
             for d in p.get("detections", [])
-            if d.get("cls", "band") == "band"  # 手動ドラッグは帯のみ初期表示
         ]
 
     return render_template(
@@ -457,6 +462,93 @@ def thumb_all(job_id, page_index):
     if not os.path.exists(path):
         return "not found", 404
     return send_file(path, mimetype="image/jpeg")
+
+
+@app.route("/orig_img/<job_id>/<int:page_index>")
+def orig_img(job_id, page_index):
+    """帯付け前のキレイな元画像。エディタの背景に使う（枠を編集しやすくするため）。"""
+    path = os.path.join(DIR_OUTPUT, job_id + "_orig", f"page_{page_index}.jpg")
+    if not os.path.exists(path):
+        return "not found", 404
+    return send_file(path, mimetype="image/jpeg")
+
+
+@app.route("/edit_page/<job_id>/<int:page_index>", methods=["POST"])
+def edit_page(job_id, page_index):
+    """ページの帯/白塗りを丸ごと編集して貼り直す。
+
+    {rects: [{cls, x0_ratio, y0_ratio, x1_ratio, y1_ratio}, ...]} を受け取り、
+    帯付け前の元画像(orig)から全部作り直す。clsが'band'なら自社帯、それ以外は白塗り。
+    エディタが現在の全枠を送ってくるので、既存検出はこのリストで完全に置き換える。
+    """
+    data = request.get_json(silent=True) or {}
+    in_rects = data.get("rects")
+    if not isinstance(in_rects, list):
+        return jsonify({"error": "rectsが不正です"}), 400
+
+    orig_path = os.path.join(DIR_OUTPUT, job_id + "_orig", f"page_{page_index}.jpg")
+    page_path = os.path.join(DIR_OUTPUT, job_id + "_pages", f"page_{page_index}.jpg")
+    if not os.path.exists(orig_path):
+        return jsonify({"error": "元ページが見つかりません"}), 404
+
+    own_band_path = get_own_band_path()
+    has_band = any(r.get("cls") == "band" for r in in_rects)
+    if has_band and not os.path.isfile(own_band_path):
+        return jsonify({"error": "自社帯が登録されていません"}), 400
+
+    try:
+        img = Image.open(orig_path).convert("RGB")  # 帯付け前から再構成
+        w, h = img.size
+
+        # 受け取った比率座標をピクセル矩形に変換（0..1にクランプ・順序正規化）
+        rects = []
+        for r in in_rects:
+            cls = r.get("cls", "manual")
+            try:
+                x0 = float(r.get("x0_ratio", 0)); y0 = float(r.get("y0_ratio", 0))
+                x1 = float(r.get("x1_ratio", 1)); y1 = float(r.get("y1_ratio", 1))
+            except (TypeError, ValueError):
+                continue
+            # 帯は全幅に固定して確実に隠す
+            if cls == "band":
+                x0, x1 = 0.0, 1.0
+            x0, x1 = sorted((max(0.0, min(1.0, x0)), max(0.0, min(1.0, x1))))
+            y0, y1 = sorted((max(0.0, min(1.0, y0)), max(0.0, min(1.0, y1))))
+            if (x1 - x0) <= 0 or (y1 - y0) <= 0:
+                continue
+            rects.append({
+                "cls": cls,
+                "x0": int(x0 * w), "y0": int(y0 * h),
+                "x1": int(x1 * w), "y1": int(y1 * h),
+            })
+
+        for d in rects:
+            rect = (d["x0"], d["y0"], d["x1"], d["y1"])
+            if d.get("cls") == "band":
+                img = apply_band(img, rect, own_band_path)
+            else:
+                img = apply_whiteout(img, rect)
+
+        img.save(page_path, quality=90)
+        thumb = img.copy()
+        thumb.thumbnail(THUMB_SIZE)
+        thumb.save(os.path.join(DIR_OUTPUT, job_id + "_thumbs", f"page_{page_index}.jpg"), quality=85)
+
+        missed = True
+        meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+        page_meta = next((p for p in meta if p["page_index"] == page_index), None)
+        if page_meta is not None:
+            missed = not any(d["cls"] == "band" for d in rects)
+            page_meta["missed"] = missed
+            page_meta["detections"] = rects
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"ok": True, "ts": int(time.time()), "missed": missed})
 
 
 @app.route("/manual_band/<job_id>/<int:page_index>", methods=["POST"])

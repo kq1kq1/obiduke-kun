@@ -65,16 +65,6 @@
     text-transform: uppercase; color: var(--text-muted); margin-bottom: 14px;
   }
 
-  .section-missed {
-    background: var(--miss-light); border: 1.5px solid #f0c4bc;
-    border-radius: 10px; padding: 20px 24px; margin-bottom: 32px;
-  }
-  .section-missed .section-title { color: var(--miss); }
-  .section-ok {
-    background: var(--surface); border: 1.5px solid var(--border);
-    border-radius: 10px; padding: 20px 24px; margin-bottom: 32px;
-  }
-
   .reorder-hint {
     background: #eef4ff; border: 1.5px solid #c4d6f0; border-radius: 8px;
     padding: 12px 18px; font-size: 0.84rem; color: #335; line-height: 1.7;
@@ -131,12 +121,6 @@
   }
   .thumb-card.missed .thumb-label { color: var(--miss); font-weight: 700; }
 
-  .all-ok-banner {
-    background: var(--ok-light); border: 1.5px solid #b0d8c0;
-    border-radius: 8px; padding: 18px 24px; color: var(--ok);
-    font-weight: 700; font-size: 0.92rem; margin-bottom: 24px;
-  }
-
   /* Modal */
   .modal-overlay {
     display: none; position: fixed; inset: 0;
@@ -170,34 +154,46 @@
   }
   #page-canvas-wrap {
     position: relative; display: inline-block; line-height: 0; user-select: none;
+    touch-action: none;
   }
   #page-canvas-wrap img {
     display: block; max-width: 100%; max-height: calc(94vh - 170px); object-fit: contain;
   }
 
-  #sel-overlay {
-    position: absolute; left: 0; right: 0; pointer-events: none;
-    border-top: 3px solid #e8a020; border-bottom: 3px solid #e8a020;
-    background: rgba(232,160,32,0.2); display: none;
+  /* 編集ボックス（帯=橙 / 白塗り=赤） */
+  .ebox { position: absolute; box-sizing: border-box; cursor: move; }
+  .ebox.band { border-top: 3px solid #e8a020; border-bottom: 3px solid #e8a020; background: rgba(232,160,32,0.22); }
+  .ebox.wo   { border: 2.5px solid #c84b2f; background: rgba(200,75,47,0.20); }
+  .ebox.sel  { box-shadow: 0 0 0 2px #2255cc; z-index: 5; }
+  .ebox-tag {
+    position: absolute; top: 0; left: 0; font-size: 0.62rem; font-weight: 700;
+    color: #fff; padding: 1px 5px; line-height: 1.4; white-space: nowrap;
   }
-  /* 白塗りモードでは2D枠（赤）で表示 */
-  #sel-overlay.whiteout {
-    right: auto; border: 3px solid #c84b2f;
-    background: rgba(200,75,47,0.18);
+  .ebox.band .ebox-tag { background: #e8a020; }
+  .ebox.wo   .ebox-tag { background: #c84b2f; }
+  .ebox-del {
+    position: absolute; top: -11px; right: -11px; width: 22px; height: 22px;
+    border-radius: 50%; border: 2px solid #fff; background: #1a1714; color: #fff;
+    font-size: 0.85rem; line-height: 1; cursor: pointer; z-index: 6; padding: 0;
+    display: flex; align-items: center; justify-content: center;
   }
-
-  /* モード切替トグル */
-  .mode-toggle { display: flex; gap: 0; border: 1.5px solid var(--border); border-radius: 7px; overflow: hidden; }
-  .mode-toggle button {
-    flex: 1; padding: 9px 6px; border: none; background: #fff; cursor: pointer;
-    font-size: 0.8rem; font-weight: 700; color: var(--text-muted); transition: all 0.15s;
+  .ebox-del:hover { background: #c84b2f; }
+  .ehandle {
+    position: absolute; width: 13px; height: 13px; background: #fff;
+    border: 2px solid #2255cc; border-radius: 50%; z-index: 6;
   }
-  .mode-toggle button + button { border-left: 1.5px solid var(--border); }
-  .mode-toggle button.active { background: var(--text); color: #fff; }
+  .h-n  { top: -7px; left: calc(50% - 7px); cursor: ns-resize; }
+  .h-s  { bottom: -7px; left: calc(50% - 7px); cursor: ns-resize; }
+  .h-e  { right: -7px; top: calc(50% - 7px); cursor: ew-resize; }
+  .h-w  { left: -7px; top: calc(50% - 7px); cursor: ew-resize; }
+  .h-nw { top: -7px; left: -7px; cursor: nwse-resize; }
+  .h-ne { top: -7px; right: -7px; cursor: nesw-resize; }
+  .h-sw { bottom: -7px; left: -7px; cursor: nesw-resize; }
+  .h-se { bottom: -7px; right: -7px; cursor: nwse-resize; }
 
   .modal-panel {
-    width: 210px; flex-shrink: 0; border-left: 1px solid var(--border);
-    padding: 18px 14px; display: flex; flex-direction: column; gap: 16px;
+    width: 230px; flex-shrink: 0; border-left: 1px solid var(--border);
+    padding: 18px 14px; display: flex; flex-direction: column; gap: 14px;
     overflow-y: auto; background: var(--surface);
   }
   .panel-label {
@@ -206,14 +202,20 @@
   }
   .instruction-box {
     background: #fff8e5; border: 1px solid #eed86a; border-radius: 6px;
-    padding: 10px 12px; font-size: 0.78rem; line-height: 1.75; color: #7a6820;
+    padding: 10px 12px; font-size: 0.76rem; line-height: 1.7; color: #7a6820;
   }
-  .range-display {
+  .add-row { display: flex; gap: 8px; }
+  .btn-add {
+    flex: 1; padding: 9px 6px; border: 1.5px solid var(--border); border-radius: 7px;
+    background: #fff; cursor: pointer; font-size: 0.8rem; font-weight: 700;
+    color: var(--text); transition: all 0.15s;
+  }
+  .btn-add:hover { background: var(--bg); }
+  .box-info {
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    padding: 10px 12px; font-size: 0.82rem; line-height: 1.7;
-    font-variant-numeric: tabular-nums;
+    padding: 10px 12px; font-size: 0.8rem; line-height: 1.7;
   }
-  .range-display .muted { color: var(--text-muted); font-size: 0.74rem; }
+  .box-info .muted { color: var(--text-muted); font-size: 0.74rem; }
 
   .btn-apply {
     background: var(--ok); color: #fff; border: none;
@@ -261,7 +263,7 @@
 
   <div class="reorder-hint">
     🔀 カードを<b>ドラッグ</b>すると出力PDFのページ順を入れ替えられます。
-    カードを<b>クリック</b>すると帯の確認・修正ができます（赤＝帯未検出）。
+    カードを<b>クリック</b>すると帯・白塗りの確認・修正ができます（赤＝帯未検出）。
   </div>
 
   <div class="thumb-grid" id="page-grid">
@@ -289,7 +291,7 @@
   </a>
 </div>
 
-<!-- モーダル -->
+<!-- モーダル（ボックスエディタ） -->
 <div class="modal-overlay" id="modal" onclick="overlayClick(event)">
   <div class="modal-box">
     <div class="modal-header">
@@ -300,36 +302,34 @@
       <div class="modal-canvas-area" id="canvas-area">
         <div id="page-canvas-wrap">
           <img id="modal-img" src="" alt="page" draggable="false">
-          <div id="sel-overlay"></div>
         </div>
       </div>
       <div class="modal-panel">
         <div>
-          <div class="panel-label">モード</div>
-          <div class="mode-toggle">
-            <button type="button" id="mode-band" class="active" onclick="setMode('band')">帯を貼る</button>
-            <button type="button" id="mode-whiteout" onclick="setMode('whiteout')">白塗りのみ</button>
-          </div>
-        </div>
-        <div>
           <div class="panel-label">操作方法</div>
-          <div class="instruction-box" id="instruction-box">
-            画像の上で<b>縦方向にドラッグ</b>すると帯の位置・高さを指定できます。<br>
-            帯は横幅いっぱいに貼られます。
+          <div class="instruction-box">
+            枠を<b>ドラッグで移動</b>、青いハンドルで<b>サイズ変更</b>、<b>×で削除</b>。<br>
+            <b style="color:#c88010">橙＝自社帯</b> / <b style="color:#c84b2f">赤＝白塗り</b>。<br>
+            背景は帯を貼る前の元画像です。
           </div>
         </div>
         <div>
-          <div class="panel-label">選択範囲</div>
-          <div class="range-display" id="range-display">
-            <span class="muted">未選択</span>
+          <div class="panel-label">枠を追加</div>
+          <div class="add-row">
+            <button class="btn-add" type="button" onclick="addBand()">＋ 帯</button>
+            <button class="btn-add" type="button" onclick="addWhiteout()">＋ 白塗り</button>
           </div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:8px">
-          <button class="btn-apply" id="btn-apply" onclick="applyBand()" disabled>
+        <div>
+          <div class="panel-label">現在の状態</div>
+          <div class="box-info" id="box-info"><span class="muted">…</span></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:auto">
+          <button class="btn-apply" id="btn-apply" onclick="applyEdits()">
             <div class="spinner" id="spinner"></div>
-            <span id="btn-text">帯を貼り付け</span>
+            <span id="btn-text">適用して貼り直す</span>
           </button>
-          <button class="btn-cancel-modal" onclick="closeModal()">キャンセル</button>
+          <button class="btn-cancel-modal" onclick="closeModal()">閉じる</button>
         </div>
         <div class="apply-result" id="apply-result"></div>
       </div>
@@ -339,172 +339,172 @@
 
 <script>
 const JOB_ID = "{{ job_id }}";
-const PAGE_DATA = {{ page_data|tojson }};  // idx -> [[y0_ratio, y1_ratio], ...]
-let curPage = null, curMissed = false;
-let curMode = 'band';  // 'band'=帯を貼る / 'whiteout'=白塗りのみ
-let selY0 = null, selY1 = null;
-let selX0 = null, selX1 = null;
-let dragging = false, dragStartY = null, dragStartX = null;
-let pendingPrefill = null;  // 画像ロード後に初期表示する帯位置(比率)
+const PAGE_DATA = {{ page_data|tojson }};  // idx -> [{cls,x0,y0,x1,y1(比率)}, ...]
+let curPage = null;
+let boxes = [];        // [{cls,x0,y0,x1,y1}] 比率(0..1)
+let selIdx = -1;
+let drag = null;       // {mode:'move'|'resize', handle, startX, startY, orig:{...}}
 
-const modalEl  = document.getElementById('modal');
-const imgEl    = document.getElementById('modal-img');
-const wrap     = document.getElementById('page-canvas-wrap');
-const selOv    = document.getElementById('sel-overlay');
+const modalEl = document.getElementById('modal');
+const imgEl   = document.getElementById('modal-img');
+const wrap    = document.getElementById('page-canvas-wrap');
 
-function setMode(mode) {
-  curMode = mode;
-  document.getElementById('mode-band').classList.toggle('active', mode === 'band');
-  document.getElementById('mode-whiteout').classList.toggle('active', mode === 'whiteout');
-  document.getElementById('instruction-box').innerHTML = mode === 'band'
-    ? '画像の上で<b>縦方向にドラッグ</b>すると帯の位置・高さを指定できます。<br>帯は横幅いっぱいに貼られます。'
-    : '消したい部分を<b>四角く囲むようにドラッグ</b>すると、その範囲だけ白塗りします。<br>ロゴ・案内図の消し残しに使えます。';
-  document.getElementById('btn-text').textContent = mode === 'band' ? '帯を貼り付け' : '白塗りする';
-  resetSel();
-}
-
+// ===== モーダル開閉 =====
 function openModal(idx, label, isMissed) {
-  curPage = idx; curMissed = isMissed;
-  selY0 = selY1 = selX0 = selX1 = null;
-  setMode('band');  // 開くたびに帯モードへ戻す
-  document.getElementById('modal-title').textContent = label + (isMissed ? ' — 手動帯付け' : ' — 確認・修正');
-  resetSel();
-  // 既存の帯があれば最下部の帯を初期選択として表示する
-  const bands = PAGE_DATA[idx] || [];
-  pendingPrefill = bands.length ? bands[bands.length - 1] : null;
+  curPage = idx;
+  // 既存検出を比率でコピー（編集中は元を壊さない）
+  boxes = (PAGE_DATA[idx] || []).map(b => ({
+    cls: b.cls === 'band' ? 'band' : 'wo',  // band以外はすべて白塗り扱い
+    x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1,
+  }));
+  selIdx = -1;
+  document.getElementById('modal-title').textContent = label + ' — 確認・修正';
   document.getElementById('apply-result').style.display = 'none';
   modalEl.classList.add('open');
-  imgEl.src = `/page_img/${JOB_ID}/${idx}?t=${Date.now()}`;
+  // 元画像ロード後に枠を描く
+  imgEl.onload = () => { renderBoxes(); updatePanel(); };
+  imgEl.src = `/orig_img/${JOB_ID}/${idx}?t=${Date.now()}`;
 }
-
-// 画像ロード完了後に初期の帯位置を枠で表示
-imgEl.addEventListener('load', () => {
-  if (!modalEl.classList.contains('open') || !pendingPrefill) return;
-  const h = imgEl.getBoundingClientRect().height;
-  selY0 = pendingPrefill[0] * h;
-  selY1 = pendingPrefill[1] * h;
-  pendingPrefill = null;
-  showSel();
-  updateRange();
-  document.getElementById('btn-apply').disabled = false;
-});
 
 function closeModal() {
   modalEl.classList.remove('open');
-  curPage = null; curMissed = false;
+  curPage = null; boxes = []; selIdx = -1; drag = null;
 }
-
 function overlayClick(e) { if (e.target === modalEl) closeModal(); }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
-// ドラッグ
-function imgY(e) {
-  const r = imgEl.getBoundingClientRect();
-  const cy = e.touches ? e.touches[0].clientY : e.clientY;
-  return Math.max(0, Math.min(cy - r.top, r.height));
-}
-function imgX(e) {
+// ===== 座標変換 =====
+function ptRatio(e) {
   const r = imgEl.getBoundingClientRect();
   const cx = e.touches ? e.touches[0].clientX : e.clientX;
-  return Math.max(0, Math.min(cx - r.left, r.width));
+  const cy = e.touches ? e.touches[0].clientY : e.clientY;
+  return {
+    x: Math.max(0, Math.min(1, (cx - r.left) / r.width)),
+    y: Math.max(0, Math.min(1, (cy - r.top) / r.height)),
+  };
 }
 
-wrap.addEventListener('mousedown', startDrag);
-wrap.addEventListener('touchstart', startDrag, {passive: false});
-
-function startDrag(e) {
-  e.preventDefault();
-  dragging = true;
-  dragStartY = imgY(e);
-  selY0 = selY1 = dragStartY;
-  if (curMode === 'whiteout') {
-    dragStartX = imgX(e);
-    selX0 = selX1 = dragStartX;
-  }
-  showSel();
-  document.addEventListener('mousemove', onMove);
-  document.addEventListener('mouseup', endDrag);
-  document.addEventListener('touchmove', onMove, {passive:false});
-  document.addEventListener('touchend', endDrag);
-}
-function onMove(e) {
-  if (!dragging) return; e.preventDefault();
-  const y = imgY(e);
-  selY0 = Math.min(dragStartY, y);
-  selY1 = Math.max(dragStartY, y);
-  if (curMode === 'whiteout') {
-    const x = imgX(e);
-    selX0 = Math.min(dragStartX, x);
-    selX1 = Math.max(dragStartX, x);
-  }
-  showSel();
-}
-function endDrag() {
-  if (!dragging) return; dragging = false;
-  document.removeEventListener('mousemove', onMove);
-  document.removeEventListener('mouseup', endDrag);
-  document.removeEventListener('touchmove', onMove);
-  document.removeEventListener('touchend', endDrag);
-  const tooSmall = (selY1 - selY0 < 5) ||
-                   (curMode === 'whiteout' && (selX1 - selX0 < 5));
-  if (tooSmall) { resetSel(); return; }
-  updateRange();
-  document.getElementById('btn-apply').disabled = false;
-}
-
-function showSel() {
-  const r = imgEl.getBoundingClientRect();
+// ===== 枠の描画 =====
+function renderBoxes() {
+  wrap.querySelectorAll('.ebox').forEach(e => e.remove());
+  if (!imgEl.complete || !imgEl.naturalWidth) return;
+  const r  = imgEl.getBoundingClientRect();
   const wR = wrap.getBoundingClientRect();
-  const offTop = r.top - wR.top;
-  const offLeft = r.left - wR.left;
-  selOv.style.display = 'block';
-  selOv.style.top = (offTop + selY0) + 'px';
-  selOv.style.height = (selY1 - selY0) + 'px';
-  if (curMode === 'whiteout') {
-    selOv.classList.add('whiteout');
-    selOv.style.left = (offLeft + selX0) + 'px';
-    selOv.style.width = (selX1 - selX0) + 'px';
-  } else {
-    selOv.classList.remove('whiteout');
-    selOv.style.left = '0';
-    selOv.style.width = '';
-  }
-}
-function resetSel() {
-  selOv.style.display = 'none';
-  selOv.classList.remove('whiteout');
-  selY0 = selY1 = selX0 = selX1 = null;
-  document.getElementById('range-display').innerHTML = '<span class="muted">未選択</span>';
-  document.getElementById('btn-apply').disabled = true;
-}
-function updateRange() {
-  const rect = imgEl.getBoundingClientRect();
-  const h = rect.height, w = rect.width;
-  const r0 = (selY0/h*100).toFixed(1);
-  const r1 = (selY1/h*100).toFixed(1);
-  if (curMode === 'whiteout') {
-    const c0 = (selX0/w*100).toFixed(1);
-    const c1 = (selX1/w*100).toFixed(1);
-    document.getElementById('range-display').innerHTML =
-      `縦: ${r0}% 〜 ${r1}%<br>横: ${c0}% 〜 ${c1}%<br><span class="muted">この範囲を白塗り</span>`;
-  } else {
-    document.getElementById('range-display').innerHTML =
-      `上端: ${r0}%<br>下端: ${r1}%<br><span class="muted">高さ: ${(r1-r0).toFixed(1)}%</span>`;
-  }
+  const offX = r.left - wR.left, offY = r.top - wR.top;
+
+  boxes.forEach((b, i) => {
+    const isBand = b.cls === 'band';
+    const x0 = isBand ? 0 : b.x0, x1 = isBand ? 1 : b.x1;
+    const el = document.createElement('div');
+    el.className = 'ebox ' + (isBand ? 'band' : 'wo') + (i === selIdx ? ' sel' : '');
+    el.style.left   = (offX + x0 * r.width) + 'px';
+    el.style.top    = (offY + b.y0 * r.height) + 'px';
+    el.style.width  = ((x1 - x0) * r.width) + 'px';
+    el.style.height = ((b.y1 - b.y0) * r.height) + 'px';
+
+    const tag = document.createElement('span');
+    tag.className = 'ebox-tag';
+    tag.textContent = isBand ? '帯' : '白塗り';
+    el.appendChild(tag);
+
+    const del = document.createElement('button');
+    del.className = 'ebox-del'; del.type = 'button'; del.textContent = '×';
+    del.addEventListener('mousedown', ev => ev.stopPropagation());
+    del.addEventListener('touchstart', ev => ev.stopPropagation(), {passive: true});
+    del.addEventListener('click', ev => {
+      ev.stopPropagation();
+      boxes.splice(i, 1); selIdx = -1; renderBoxes(); updatePanel();
+    });
+    el.appendChild(del);
+
+    // ハンドルは選択中の枠だけ表示（ごちゃつき防止）
+    if (i === selIdx) {
+      const handles = isBand ? ['n', 's'] : ['nw', 'ne', 'sw', 'se', 'n', 's', 'e', 'w'];
+      handles.forEach(h => {
+        const hd = document.createElement('div');
+        hd.className = 'ehandle h-' + h;
+        hd.addEventListener('mousedown', ev => startBoxDrag(ev, i, 'resize', h));
+        hd.addEventListener('touchstart', ev => startBoxDrag(ev, i, 'resize', h), {passive: false});
+        el.appendChild(hd);
+      });
+    }
+
+    el.addEventListener('mousedown', ev => startBoxDrag(ev, i, 'move', null));
+    el.addEventListener('touchstart', ev => startBoxDrag(ev, i, 'move', null), {passive: false});
+    wrap.appendChild(el);
+  });
 }
 
-// 帯貼り付け／白塗りAPI
-async function applyBand() {
-  if (selY0 === null || curPage === null) return;
-  const rect = imgEl.getBoundingClientRect();
-  const h = rect.height, w = rect.width;
-  const y0_ratio = selY0 / h;
-  const y1_ratio = selY1 / h;
-  // 帯モードは全幅、白塗りモードは選択範囲の横幅
-  const x0_ratio = curMode === 'whiteout' ? selX0 / w : 0;
-  const x1_ratio = curMode === 'whiteout' ? selX1 / w : 1;
-  const defaultLabel = curMode === 'band' ? '帯を貼り付け' : '白塗りする';
+// ===== ドラッグ（移動・リサイズ） =====
+function startBoxDrag(e, i, mode, handle) {
+  e.preventDefault(); e.stopPropagation();
+  selIdx = i; renderBoxes();
+  const p = ptRatio(e);
+  drag = { mode, handle, startX: p.x, startY: p.y, orig: { ...boxes[i] } };
+  document.addEventListener('mousemove', onBoxMove);
+  document.addEventListener('mouseup', endBoxDrag);
+  document.addEventListener('touchmove', onBoxMove, {passive: false});
+  document.addEventListener('touchend', endBoxDrag);
+}
 
+function onBoxMove(e) {
+  if (!drag) return;
+  e.preventDefault();
+  const p = ptRatio(e);
+  const b = boxes[selIdx], o = drag.orig;
+  const isBand = b.cls === 'band';
+  const MIN = 0.01;
+
+  if (drag.mode === 'move') {
+    const dx = p.x - drag.startX, dy = p.y - drag.startY;
+    const w = o.x1 - o.x0, h = o.y1 - o.y0;
+    let ny0 = Math.max(0, Math.min(1 - h, o.y0 + dy));
+    b.y0 = ny0; b.y1 = ny0 + h;
+    if (!isBand) {
+      let nx0 = Math.max(0, Math.min(1 - w, o.x0 + dx));
+      b.x0 = nx0; b.x1 = nx0 + w;
+    }
+  } else { // resize
+    const h = drag.handle;
+    if (h.includes('n')) b.y0 = Math.min(p.y, o.y1 - MIN);
+    if (h.includes('s')) b.y1 = Math.max(p.y, o.y0 + MIN);
+    if (!isBand) {
+      if (h.includes('w')) b.x0 = Math.min(p.x, o.x1 - MIN);
+      if (h.includes('e')) b.x1 = Math.max(p.x, o.x0 + MIN);
+    }
+  }
+  renderBoxes(); updatePanel();
+}
+
+function endBoxDrag() {
+  drag = null;
+  document.removeEventListener('mousemove', onBoxMove);
+  document.removeEventListener('mouseup', endBoxDrag);
+  document.removeEventListener('touchmove', onBoxMove);
+  document.removeEventListener('touchend', endBoxDrag);
+}
+
+// ===== 枠の追加 =====
+function addBand() {
+  boxes.push({ cls: 'band', x0: 0, y0: 0.42, x1: 1, y1: 0.52 });
+  selIdx = boxes.length - 1; renderBoxes(); updatePanel();
+}
+function addWhiteout() {
+  boxes.push({ cls: 'wo', x0: 0.32, y0: 0.42, x1: 0.68, y1: 0.52 });
+  selIdx = boxes.length - 1; renderBoxes(); updatePanel();
+}
+
+function updatePanel() {
+  const nBand = boxes.filter(b => b.cls === 'band').length;
+  const nWo   = boxes.length - nBand;
+  document.getElementById('box-info').innerHTML =
+    `帯: <b>${nBand}</b> 個　白塗り: <b>${nWo}</b> 個` +
+    (boxes.length === 0 ? '<br><span class="muted">枠なし＝元画像のまま出力</span>' : '');
+}
+
+// ===== 適用（全枠を送って貼り直し） =====
+async function applyEdits() {
+  if (curPage === null) return;
   const btn = document.getElementById('btn-apply');
   const sp  = document.getElementById('spinner');
   const txt = document.getElementById('btn-text');
@@ -513,49 +513,55 @@ async function applyBand() {
   btn.disabled = true; sp.style.display = 'block'; txt.textContent = '処理中...';
   res.style.display = 'none';
 
+  const payload = {
+    rects: boxes.map(b => ({
+      cls: b.cls === 'band' ? 'band' : 'manual',
+      x0_ratio: b.x0, y0_ratio: b.y0, x1_ratio: b.x1, y1_ratio: b.y1,
+    })),
+  };
+
   try {
-    const r = await fetch(`/manual_band/${JOB_ID}/${curPage}`, {
+    const r = await fetch(`/edit_page/${JOB_ID}/${curPage}`, {
       method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({mode: curMode, y0_ratio, y1_ratio, x0_ratio, x1_ratio})
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
     const data = await r.json();
+    if (!data.ok) throw new Error(data.error || 'エラー');
 
-    if (data.ok) {
-      const ts = data.ts;
-      // 帯モードで貼った場合のみ次回の初期帯位置を更新（白塗りは帯位置に影響しない）
-      if (curMode === 'band') PAGE_DATA[curPage] = [[y0_ratio, y1_ratio]];
-      const th = document.getElementById(`thumb-${curPage}`);
-      if (th) th.src = `/thumb_all/${JOB_ID}/${curPage}?t=${ts}`;
-      imgEl.src = `/page_img/${JOB_ID}/${curPage}?t=${ts}`;
-      resetSel();
+    // 編集内容を保持（次回開いたときの初期表示にも反映）
+    PAGE_DATA[curPage] = boxes.map(b => ({ cls: b.cls === 'band' ? 'band' : 'manual', x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 }));
 
-      // カード更新（帯モードで未検出を解消した場合のみ「手動」表示に変更）
-      const card = document.getElementById(`card-${curPage}`);
-      if (card && curMode === 'band') {
-        card.classList.remove('missed'); card.classList.add('manually-done');
-        const badge = document.getElementById(`badge-${curPage}`);
+    // グリッドのサムネを更新（実際の処理結果を表示）
+    const th = document.getElementById(`thumb-${curPage}`);
+    if (th) th.src = `/thumb_all/${JOB_ID}/${curPage}?t=${data.ts}`;
+
+    // カードの状態を更新
+    const card  = document.getElementById(`card-${curPage}`);
+    const badge = document.getElementById(`badge-${curPage}`);
+    const lbl   = document.getElementById(`label-${curPage}`);
+    if (card) {
+      card.classList.remove('missed', 'ok', 'manually-done');
+      if (data.missed) {
+        card.classList.add('missed');
+        if (badge) { badge.className = 'thumb-status status-miss'; badge.textContent = '未検出'; }
+      } else {
+        card.classList.add('manually-done');
         if (badge) { badge.className = 'thumb-status status-manual'; badge.textContent = '手動'; }
-        const lbl = document.getElementById(`label-${curPage}`);
         if (lbl) lbl.style.color = '';
       }
-      updateCounts();
-
-      res.className = 'apply-result ok';
-      res.textContent = curMode === 'whiteout' ? '✓ 白塗りしました'
-                        : (curMissed ? '✓ 帯を貼り付けました' : '✓ 修正しました');
-      res.style.display = 'block';
-      // 白塗りは続けて作業することが多いのでモーダルは閉じない
-      if (curMode === 'band') setTimeout(() => closeModal(), 400);
-      return;
-    } else {
-      throw new Error(data.error || 'エラー');
     }
-  } catch (e) {
-    res.className = 'apply-result err'; res.textContent = '✗ ' + e.message;
-  } finally {
+    updateCounts();
+
+    res.className = 'apply-result ok';
+    res.textContent = '✓ 貼り直しました';
     res.style.display = 'block';
-    sp.style.display = 'none'; txt.textContent = defaultLabel; btn.disabled = false;
+  } catch (e) {
+    res.className = 'apply-result err';
+    res.textContent = '✗ ' + e.message;
+    res.style.display = 'block';
+  } finally {
+    sp.style.display = 'none'; txt.textContent = '適用して貼り直す'; btn.disabled = false;
   }
 }
 
@@ -572,6 +578,11 @@ function setCardOrientation(imgEl, cardId) {
     if (card) card.classList.add('landscape');
   }
 }
+
+// ウィンドウサイズ変更時は枠を描き直す（画像の表示サイズが変わるため）
+window.addEventListener('resize', () => {
+  if (modalEl.classList.contains('open')) renderBoxes();
+});
 
 // ===== ページ並べ替え（ドラッグ＆ドロップ） =====
 const grid = document.getElementById('page-grid');
@@ -590,7 +601,6 @@ function initDragDrop() {
       dragSrc = null;
       saveOrder();
     });
-    // ドラッグ中はカードをリアルタイムに差し込んで順序を入れ替える
     card.addEventListener('dragover', e => {
       e.preventDefault();
       if (!dragSrc || card === dragSrc) return;
@@ -616,8 +626,8 @@ function saveOrder() {
   saveTimer = setTimeout(() => {
     fetch(`/reorder/${JOB_ID}`, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({order})
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order })
     }).catch(() => {});
   }, 150);
 }
