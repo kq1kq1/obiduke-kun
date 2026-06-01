@@ -18,6 +18,16 @@
       font-size:13px; padding:5px 12px; cursor:pointer;
     }
     .btn-del:hover { background:#fff0f0; border-color:#b00020; }
+    .btn-default {
+      background:none; border:1px solid #ddd; border-radius:5px; color:#1a6;
+      font-size:13px; padding:5px 12px; cursor:pointer;
+    }
+    .btn-default:hover { background:#eefaf3; border-color:#1a6; }
+    .badge-default {
+      background:#1a6; color:#fff; font-size:12px; font-weight:bold;
+      padding:4px 10px; border-radius:12px;
+    }
+    .band-item.is-default { border-color:#1a6; box-shadow:0 0 0 1px #1a6 inset; }
     .upload-box { border:2px dashed #bbb; border-radius:8px; padding:18px; background:#fafafa; max-width:640px; margin-bottom:24px; }
     .empty { color:#888; }
   </style>
@@ -45,12 +55,20 @@
 
   <section>
     <h2>登録済みの自社帯</h2>
+    <p style="font-size:13px; color:#666; margin-bottom:12px;">
+      <b style="color:#1a6;">デフォルト</b>＝トップページで最初に選ばれる帯です。「デフォルトにする」で変更できます。
+    </p>
     {% if own_bands %}
       <ul class="band-list">
         {% for b in own_bands %}
-          <li class="band-item" id="item-{{ loop.index }}">
+          <li class="band-item {{ 'is-default' if b == default_band else '' }}" id="item-{{ loop.index }}" data-name="{{ b }}">
             <img src="{{ url_for('own_band_file', filename=b) }}" alt="{{ b }}">
             <span class="name">{{ b }}</span>
+            {% if b == default_band %}
+              <span class="badge-default js-badge">デフォルト</span>
+            {% else %}
+              <button class="btn-default js-setdefault" onclick="setDefault('{{ b }}')">デフォルトにする</button>
+            {% endif %}
             <button class="btn-del" onclick="deleteBand('{{ b }}', 'item-{{ loop.index }}')">削除</button>
           </li>
         {% endfor %}
@@ -73,6 +91,38 @@
       } else {
         alert('削除に失敗しました: ' + (data.error || '不明なエラー'));
       }
+    }
+
+    async function setDefault(name) {
+      const fd = new FormData();
+      fd.append('filename', name);
+      const r = await fetch('/own_bands/set_default', { method: 'POST', body: fd });
+      const data = await r.json();
+      if (!data.ok) {
+        alert('設定に失敗しました: ' + (data.error || '不明なエラー'));
+        return;
+      }
+      // 全アイテムの表示を更新：選んだものをデフォルト表示、他はボタンに戻す
+      document.querySelectorAll('.band-item').forEach(item => {
+        const isThis = item.dataset.name === name;
+        item.classList.toggle('is-default', isThis);
+        const badge = item.querySelector('.js-badge');
+        const btn = item.querySelector('.js-setdefault');
+        if (isThis) {
+          if (btn) {
+            const span = document.createElement('span');
+            span.className = 'badge-default js-badge';
+            span.textContent = 'デフォルト';
+            btn.replaceWith(span);
+          }
+        } else if (badge) {
+          const button = document.createElement('button');
+          button.className = 'btn-default js-setdefault';
+          button.textContent = 'デフォルトにする';
+          button.onclick = () => setDefault(item.dataset.name);
+          badge.replaceWith(button);
+        }
+      });
     }
   </script>
 </body>

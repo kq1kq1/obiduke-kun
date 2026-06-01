@@ -40,6 +40,8 @@ DIR_OWN_BANDS = os.path.join(BASE, "own_bands")
 DIR_UPLOAD = os.path.join(BASE, "uploads")
 DIR_OUTPUT = os.path.join(BASE, "outputs")
 OWN_BAND_DEFAULT = os.path.join(BASE, "band_default.png")
+# デフォルトに使う自社帯のファイル名を覚えておくファイル（再起動後も維持したいなら要コミット）
+DEFAULT_BAND_MARKER = os.path.join(BASE, "own_bands_default.txt")
 
 for d in (DIR_OWN_BANDS, DIR_UPLOAD, DIR_OUTPUT):
     os.makedirs(d, exist_ok=True)
@@ -58,15 +60,40 @@ def list_own_bands():
     return sorted(files)
 
 
+def get_default_band():
+    """デフォルトに設定された自社帯のファイル名を返す。
+
+    未設定・無効（削除済みなど）なら先頭のファイル。1つも無ければ None。
+    """
+    files = list_own_bands()
+    if not files:
+        return None
+    try:
+        if os.path.isfile(DEFAULT_BAND_MARKER):
+            with open(DEFAULT_BAND_MARKER, encoding="utf-8") as f:
+                name = f.read().strip()
+            if name in files:
+                return name
+    except Exception:
+        pass
+    return files[0]
+
+
+def set_default_band(name):
+    """デフォルトの自社帯ファイル名を保存する。"""
+    with open(DEFAULT_BAND_MARKER, "w", encoding="utf-8") as f:
+        f.write(os.path.basename(name))
+
+
 def get_own_band_path(band_name=None):
-    """指定された自社帯のパスを返す。無ければ先頭、それも無ければデフォルト。"""
+    """指定された自社帯のパスを返す。無ければデフォルト、最後は同梱デフォルト画像。"""
     if band_name:
         path = os.path.join(DIR_OWN_BANDS, os.path.basename(band_name))
         if os.path.isfile(path):
             return path
-    files = list_own_bands()
-    if files:
-        return os.path.join(DIR_OWN_BANDS, files[0])
+    default = get_default_band()
+    if default:
+        return os.path.join(DIR_OWN_BANDS, default)
     return OWN_BAND_DEFAULT
 
 
@@ -298,7 +325,7 @@ threading.Thread(target=detect.warmup, daemon=True).start()
 
 @app.route("/")
 def index():
-    return render_template("index.html", own_bands=list_own_bands())
+    return render_template("index.html", own_bands=list_own_bands(), default_band=get_default_band())
 
 
 @app.route("/process", methods=["POST"])
@@ -551,86 +578,6 @@ def edit_page(job_id, page_index):
     return jsonify({"ok": True, "ts": int(time.time()), "missed": missed})
 
 
-@app.route("/manual_band/<job_id>/<int:page_index>", methods=["POST"])
-def manual_band(job_id, page_index):
-    """手動帯付け／位置調整: {y0_ratio, y1_ratio} を受け取りページ画像を作り直す。
-
-    白塗りが重ならないよう、帯付け前の元画像(orig)から再構成する。
-    手動範囲と重ならない既存の帯は残し、重なる帯は手動指定で置き換える。
-    """
-    data = request.get_json(silent=True) or {}
-    mode = data.get("mode", "band")  # 'band'=帯を貼る / 'whiteout'=白塗りのみ
-    try:
-        y0_ratio = float(data.get("y0_ratio", 0))
-        y1_ratio = float(data.get("y1_ratio", 1))
-        x0_ratio = float(data.get("x0_ratio", 0))
-        x1_ratio = float(data.get("x1_ratio", 1))
-    except (TypeError, ValueError):
-        return jsonify({"error": "範囲が不正です"}), 400
-    if y1_ratio <= y0_ratio or x1_ratio <= x0_ratio:
-        return jsonify({"error": "範囲が不正です"}), 400
-
-    orig_path = os.path.join(DIR_OUTPUT, job_id + "_orig", f"page_{page_index}.jpg")
-    page_path = os.path.join(DIR_OUTPUT, job_id + "_pages", f"page_{page_index}.jpg")
-    if not os.path.exists(orig_path):
-        return jsonify({"error": "元ページが見つかりません"}), 404
-
-    own_band_path = get_own_band_path()
-    if not os.path.isfile(own_band_path):
-        return jsonify({"error": "自社帯が登録されていません"}), 400
-
-    try:
-        meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
-        with open(meta_path, encoding="utf-8") as f:
-            meta = json.load(f)
-        page_meta = next((p for p in meta if p["page_index"] == page_index), None)
-
-        img = Image.open(orig_path).convert("RGB")  # 帯付け前から再構成
-        w, h = img.size
-        ny0, ny1 = int(y0_ratio * h), int(y1_ratio * h)
-        nx0, nx1 = int(x0_ratio * w), int(x1_ratio * w)
-
-        if mode == "whiteout":
-            # 白塗りのみ: 2D範囲をそのまま白塗り。既存検出は全て残す
-            new_rect = {"cls": "manual", "x0": nx0, "y0": ny0, "x1": nx1, "y1": ny1}
-            rects = list(page_meta.get("detections", [])) if page_meta else []
-            rects.append(new_rect)
-        else:
-            # 帯を貼る: 全幅。縦に重なる既存の帯のみ置き換え、他の検出は残す
-            new_rect = {"cls": "band", "x0": 0, "y0": ny0, "x1": w, "y1": ny1}
-            rects = []
-            if page_meta:
-                for d in page_meta.get("detections", []):
-                    # 縦に重なる既存の「帯」だけ除外（ロゴ・地図・手動白塗りは保持）
-                    if d.get("cls", "band") == "band" and not (d["y1"] < ny0 or d["y0"] > ny1):
-                        continue
-                    rects.append(d)
-            rects.append(new_rect)
-
-        for d in rects:
-            rect = (d["x0"], d["y0"], d["x1"], d["y1"])
-            if d.get("cls", "band") == "band":
-                img = apply_band(img, rect, own_band_path)
-            else:
-                img = apply_whiteout(img, rect)
-
-        img.save(page_path, quality=90)
-        thumb = img.copy()
-        thumb.thumbnail(THUMB_SIZE)
-        thumb.save(os.path.join(DIR_OUTPUT, job_id + "_thumbs", f"page_{page_index}.jpg"), quality=85)
-
-        if page_meta is not None:
-            # 帯が1つでもあれば取りこぼし解消とみなす
-            page_meta["missed"] = not any(d.get("cls", "band") == "band" for d in rects)
-            page_meta["detections"] = rects
-            with open(meta_path, "w", encoding="utf-8") as f:
-                json.dump(meta, f, ensure_ascii=False)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    return jsonify({"ok": True, "ts": int(time.time())})
-
-
 @app.route("/download/<job_id>")
 def download(job_id):
     """全ページ画像からPDFを生成して返す。"""
@@ -665,7 +612,21 @@ def download(job_id):
 
 @app.route("/bands")
 def bands():
-    return render_template("bands.html", own_bands=list_own_bands())
+    return render_template("bands.html", own_bands=list_own_bands(), default_band=get_default_band())
+
+
+@app.route("/own_bands/set_default", methods=["POST"])
+def set_default_own_band():
+    """デフォルトの自社帯を変更する。{filename} を受け取る。"""
+    name = request.form.get("filename", "")
+    path = os.path.join(DIR_OWN_BANDS, os.path.basename(name))
+    if not name or not os.path.isfile(path):
+        return jsonify({"ok": False, "error": "ファイルが見つかりません"}), 404
+    try:
+        set_default_band(name)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True})
 
 
 @app.route("/own_bands/<path:filename>")

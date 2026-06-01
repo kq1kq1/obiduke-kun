@@ -118,11 +118,11 @@
           <div style="display:flex; align-items:center; gap:12px;">
             <select name="own_band" id="own-band-select" onchange="updateBandPreview(this)">
               {% for b in own_bands %}
-                <option value="{{ b }}">{{ b }}</option>
+                <option value="{{ b }}" {{ 'selected' if b == default_band else '' }}>{{ b }}</option>
               {% endfor %}
             </select>
             <img id="own-band-preview"
-              src="{{ url_for('own_band_file', filename=own_bands[0]) }}"
+              src="{{ url_for('own_band_file', filename=default_band or own_bands[0]) }}"
               class="own-band-preview" alt="自社帯プレビュー">
           </div>
         {% else %}
