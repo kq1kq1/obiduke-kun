@@ -97,6 +97,33 @@ def get_own_band_path(band_name=None):
     return OWN_BAND_DEFAULT
 
 
+def _job_band_file(job_id):
+    return os.path.join(DIR_OUTPUT, job_id + "_band.txt")
+
+
+def _save_job_band(job_id, own_band_path):
+    """そのジョブで使った自社帯のパスを記録する（手動修正時にも同じ帯を使うため）。"""
+    try:
+        with open(_job_band_file(job_id), "w", encoding="utf-8") as f:
+            f.write(own_band_path)
+    except Exception:
+        pass
+
+
+def _get_job_band_path(job_id):
+    """ジョブで使った自社帯のパスを返す。記録が無ければデフォルト。"""
+    path = _job_band_file(job_id)
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                p = f.read().strip()
+            if p and os.path.isfile(p):
+                return p
+        except Exception:
+            pass
+    return get_own_band_path()
+
+
 def clear_old_files(current_job_id=None):
     """current_job_id以外で、一定時間より古い一時ファイルだけ削除する。"""
     now = time.time()
@@ -229,6 +256,9 @@ def process_job(job_id, in_paths, own_band_path, whiteout_map=False):
     orig_dir = os.path.join(DIR_OUTPUT, job_id + "_orig")
     for d in (pages_dir, thumb_dir, orig_dir):
         os.makedirs(d, exist_ok=True)
+
+    # 手動修正(edit_page)でも同じ帯を貼れるよう、使った自社帯を記録しておく
+    _save_job_band(job_id, own_band_path)
 
     try:
         # 総ページ数を先に数える
@@ -554,7 +584,7 @@ def edit_page(job_id, page_index):
     if not os.path.exists(orig_path):
         return jsonify({"error": "元ページが見つかりません"}), 404
 
-    own_band_path = get_own_band_path()
+    own_band_path = _get_job_band_path(job_id)  # ジョブで選んだ帯を使う
     has_band = any(r.get("cls") == "band" for r in in_rects)
     if has_band and not os.path.isfile(own_band_path):
         return jsonify({"error": "自社帯が登録されていません"}), 400
