@@ -26,6 +26,7 @@ from PIL import Image, ImageDraw
 import fitz  # PyMuPDF
 
 import detect
+import training_data
 
 # ============================================
 # 設定・パス
@@ -203,21 +204,54 @@ def apply_whiteout(page_img, rect):
     return page
 
 
-def rect_for_object(o, W, H):
-    """検出物から白塗り矩形と処理種別を決める。
+# 枠のクラス。band=白塗りして自社帯に差し替え、logo/map/other=白塗りのみ。
+# logo/map は再学習のラベルになる。other は「帯でもロゴでも案内図でもないが隠したい場所」
+# （QRコード等）で、学習ラベルには使わない（クラス定義が壊れるため）。
+BOX_CLASSES = ("band", "logo", "map", "other")
 
-    band(会社情報帯)は全幅の横帯なので左右いっぱいに広げ、上下に少し余白を足して
-    取りこぼし（枠線・1行分）まで確実に隠す。logo/mapは局所的なので検出枠＋わずかな余白。
-    返り値: ((x0,y0,x1,y1), mode)  mode='band' or 'white'
+
+def norm_cls(cls):
+    """クラス名を既定の4種に寄せる。旧データの 'manual' / 'wo' は other 扱い。"""
+    return cls if cls in BOX_CLASSES else "other"
+
+
+def label_rect(o, W, H):
+    """検出物から「保存する矩形」を作る。これがそのまま再学習のラベルになる。
+
+    保存する座標にパディングを足してはいけない。膨らんだ枠をラベルにすると
+    「帯は実際より少し大きい」とモデルが覚えてしまい、枠の精度が落ちる。
+    膨張は貼り付ける瞬間だけ paste_rect() で効かせる。
+
+    band(会社情報帯)だけは左右いっぱいに揃える。他社帯は実際ほぼ常に全幅の横帯で、
+    ラベルの付け方を「全幅」で統一しておくとエディタでの手修正と規約が一致する
+    （逆に統一しないと、人が直した枠と検出枠でx方向の規約が混ざって学習が濁る）。
     """
-    cls = o.get("cls", "band")
+    if o.get("cls") == "band":
+        return (0, int(o["y0"]), W, int(o["y1"]))
+    return (int(o["x0"]), int(o["y0"]), int(o["x1"]), int(o["y1"]))
+
+
+def paste_rect(cls, rect, W, H):
+    """保存済みの矩形から「実際に白塗り／帯を貼る矩形」を作る。
+
+    取りこぼし（枠線・1行分）まで確実に隠すため少し外に広げる。
+    ここで広げた値はラベルには戻さない（label_rect の説明を参照）。
+    """
+    x0, y0, x1, y1 = rect
     if cls == "band":
         pad = int(H * 0.006)
-        rect = (0, o["y0"] - pad, W, o["y1"] + pad)
-        return rect, "band"
+        return (0, y0 - pad, W, y1 + pad)
     pad = int(H * 0.004)
-    rect = (o["x0"] - pad, o["y0"] - pad, o["x1"] + pad, o["y1"] + pad)
-    return rect, "white"
+    return (x0 - pad, y0 - pad, x1 + pad, y1 + pad)
+
+
+def paint_box(img, cls, rect, own_band_path):
+    """枠1つを画像に適用する。band は白塗り＋自社帯、それ以外は白塗りのみ。"""
+    W, H = img.size
+    prect = paste_rect(cls, rect, W, H)
+    if cls == "band":
+        return apply_band(img, prect, own_band_path)
+    return apply_whiteout(img, prect)
 
 
 # ============================================
@@ -288,19 +322,22 @@ def process_job(job_id, in_paths, own_band_path, whiteout_map=False):
                     img.save(os.path.join(orig_dir, f"page_{abs_idx}.jpg"), quality=90)
 
                     detections = []
+                    label_only = []
                     for o in objs:
-                        # 案内図はオプションがオフなら白塗りしない（区画図は元々学習対象外）
-                        if o["cls"] == "map" and not whiteout_map:
-                            continue
-                        rect, mode = rect_for_object(o, img_w, img_h)
-                        if mode == "band":
-                            img = apply_band(img, rect, own_band_path)
-                        else:
-                            img = apply_whiteout(img, rect)
-                        detections.append({
+                        lrect = label_rect(o, img_w, img_h)
+                        entry = {
                             "cls": o["cls"],
-                            "x0": rect[0], "y0": rect[1], "x1": rect[2], "y1": rect[3],
-                        })
+                            "x0": lrect[0], "y0": lrect[1], "x1": lrect[2], "y1": lrect[3],
+                            "conf": round(o.get("conf", 0.0), 3),
+                        }
+                        # 案内図はオプションがオフなら白塗りしない（区画図は元々学習対象外）。
+                        # ただし「ここに案内図がある」という事実はラベルとして残す。捨てると
+                        # 「ここに案内図は無い」と教えることになり、案内図の検出力が落ちる。
+                        if o["cls"] == "map" and not whiteout_map:
+                            label_only.append(entry)
+                            continue
+                        img = paint_box(img, o["cls"], lrect, own_band_path)
+                        detections.append(entry)
 
                     img.save(os.path.join(pages_dir, f"page_{abs_idx}.jpg"), quality=90)
                     thumb = img.copy()
@@ -316,6 +353,9 @@ def process_job(job_id, in_paths, own_band_path, whiteout_map=False):
                         "img_w": img_w,
                         "img_h": img_h,
                         "detections": detections,
+                        # 白塗りはしないがラベルとしては残す枠（案内図オフのときの map）。
+                        # エディタには出さず、学習データに送るときだけ detections に合流させる。
+                        "label_only": label_only,
                     }
                     page_results.append(entry)
                     if is_missed:
@@ -351,6 +391,10 @@ app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024  # 300MBまで
 # 起動時にモデルを先読み＆コンパイル（OpenVINOの初回コンパイルは数十秒かかるため）。
 # サーバ起動はブロックしないよう別スレッドで実行する。
 threading.Thread(target=detect.warmup, daemon=True).start()
+
+# 学習データの送信先(HF Dataset)を準備する。リポジトリ作成で通信するので別スレッド。
+# 未設定なら何もせず終わる（ローカル開発では無効のまま）。
+threading.Thread(target=training_data.init, daemon=True).start()
 
 
 @app.route("/")
@@ -444,6 +488,57 @@ def _load_order(job_id, default_indices):
     return valid
 
 
+def _confirmed_path(job_id):
+    return os.path.join(DIR_OUTPUT, job_id + "_confirmed.json")
+
+
+# 確認済みリストは「読んで足して書く」ので、同時アクセスで消えないようロックする
+confirmed_lock = threading.Lock()
+
+
+def _load_confirmed(job_id):
+    """学習データとして記録済みのpage_indexの集合を返す。"""
+    path = _confirmed_path(job_id)
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            pass
+    return set()
+
+
+def _mark_confirmed(job_id, page_index):
+    """ページを確認済みとして記録する（リロード後もチェックが残るように）。"""
+    with confirmed_lock:
+        done = _load_confirmed(job_id)
+        done.add(int(page_index))
+        try:
+            with open(_confirmed_path(job_id), "w", encoding="utf-8") as f:
+                json.dump(sorted(done), f)
+        except Exception as e:
+            print(f"[warn] 確認済みの記録に失敗 {job_id}/{page_index}: {e}")
+
+
+def _send_training_data(job_id, page_index, page_meta, boxes, img_w, img_h, edited):
+    """人が確認・修正した1ページを学習データとして送る。
+
+    白塗りしない枠(label_only)も一緒に送る。送らないと「ここには何も無い」と
+    教えることになり、案内図の検出力が落ちる。
+    """
+    orig_path = os.path.join(DIR_OUTPUT, job_id + "_orig", f"page_{page_index}.jpg")
+    if not os.path.exists(orig_path):
+        return False
+    extra = (page_meta or {}).get("label_only", []) or []
+    return training_data.save_page(
+        orig_path=orig_path,
+        boxes=list(boxes) + list(extra),
+        img_w=img_w,
+        img_h=img_h,
+        edited=edited,
+    )
+
+
 def _deleted_path(job_id):
     return os.path.join(DIR_OUTPUT, job_id + "_deleted.json")
 
@@ -500,6 +595,8 @@ def review(job_id):
         missed_count=missed_count,
         ok_count=ok_count,
         total=len(page_results),
+        confirmed=sorted(_load_confirmed(job_id)),
+        training=training_data.status(),
     )
 
 
@@ -593,16 +690,17 @@ def edit_page(job_id, page_index):
         img = Image.open(orig_path).convert("RGB")  # 帯付け前から再構成
         w, h = img.size
 
-        # 受け取った比率座標をピクセル矩形に変換（0..1にクランプ・順序正規化）
+        # 受け取った比率座標をピクセル矩形に変換（0..1にクランプ・順序正規化）。
+        # ここで作る座標はそのまま再学習のラベルになるので、パディングは足さない。
         rects = []
         for r in in_rects:
-            cls = r.get("cls", "manual")
+            cls = norm_cls(r.get("cls"))
             try:
                 x0 = float(r.get("x0_ratio", 0)); y0 = float(r.get("y0_ratio", 0))
                 x1 = float(r.get("x1_ratio", 1)); y1 = float(r.get("y1_ratio", 1))
             except (TypeError, ValueError):
                 continue
-            # 帯は全幅に固定して確実に隠す
+            # 帯は全幅で統一する（label_rect と同じ規約。ラベルの一貫性を保つため）
             if cls == "band":
                 x0, x1 = 0.0, 1.0
             x0, x1 = sorted((max(0.0, min(1.0, x0)), max(0.0, min(1.0, x1))))
@@ -616,11 +714,7 @@ def edit_page(job_id, page_index):
             })
 
         for d in rects:
-            rect = (d["x0"], d["y0"], d["x1"], d["y1"])
-            if d.get("cls") == "band":
-                img = apply_band(img, rect, own_band_path)
-            else:
-                img = apply_whiteout(img, rect)
+            img = paint_box(img, d["cls"], (d["x0"], d["y0"], d["x1"], d["y1"]), own_band_path)
 
         img.save(page_path, quality=90)
         thumb = img.copy()
@@ -628,6 +722,7 @@ def edit_page(job_id, page_index):
         thumb.save(os.path.join(DIR_OUTPUT, job_id + "_thumbs", f"page_{page_index}.jpg"), quality=85)
 
         missed = True
+        page_meta = None
         meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
         with open(meta_path, encoding="utf-8") as f:
             meta = json.load(f)
@@ -641,7 +736,48 @@ def edit_page(job_id, page_index):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    return jsonify({"ok": True, "ts": int(time.time()), "missed": missed})
+    # 人が直した枠は最良の教師データ。次の再学習に回せるよう記録する。
+    # ここでの失敗は利用者の作業に影響させない（saved=falseを返すだけ）。
+    saved = _send_training_data(job_id, page_index, page_meta, rects, w, h, edited=True)
+    _mark_confirmed(job_id, page_index)
+
+    return jsonify({"ok": True, "ts": int(time.time()), "missed": missed, "saved": saved})
+
+
+@app.route("/confirm_page/<job_id>/<int:page_index>", methods=["POST"])
+def confirm_page(job_id, page_index):
+    """「このページはこれでOK」を記録し、学習データとして送る。
+
+    人が目で見て正しいと確認したページは、検出結果をそのまま正解として使える。
+    誤検出（関係ない場所への白塗り）を減らすには、こういう「合っている例」と
+    「ここには何も無い例」がどうしても必要になる。
+    自動では貯めない。人が確認したものだけを貯めないと、モデル自身の間違いを
+    そのまま教え込んで精度が上がらなくなる。
+    """
+    meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
+    if not os.path.exists(meta_path):
+        return jsonify({"error": "ジョブが見つかりません"}), 404
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    page_meta = next((p for p in meta if p["page_index"] == page_index), None)
+    if page_meta is None:
+        return jsonify({"error": "ページが見つかりません"}), 404
+
+    saved = _send_training_data(
+        job_id,
+        page_index,
+        page_meta,
+        page_meta.get("detections", []),
+        page_meta.get("img_w") or 0,
+        page_meta.get("img_h") or 0,
+        edited=False,
+    )
+    _mark_confirmed(job_id, page_index)
+    return jsonify({"ok": True, "saved": saved})
 
 
 @app.route("/download/<job_id>")

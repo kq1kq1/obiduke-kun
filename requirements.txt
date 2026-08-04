@@ -10,3 +10,5 @@ torchvision
 ultralytics
 # Intel CPUでの推論高速化（best_openvino_modelの実行に必要）
 openvino>=2024.0.0
+# 手修正を学習データとしてHF Datasetリポジトリに送るため（CommitScheduler）
+huggingface_hub>=0.30.0

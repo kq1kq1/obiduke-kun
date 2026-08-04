@@ -29,3 +29,7 @@ processed/
 *.pdf
 outputs/
 training_images/
+# 学習データの一時置き場（HF Datasetリポジトリへ送るためのローカルコピー）
+training_data/
+# 学習データを取り出したもの（tools/fetch_training_data.py の出力）
+collected/
