@@ -18,7 +18,14 @@
 必要な環境変数（HF Spacesでは Settings > Variables and secrets に設定）:
   TRAINING_DATA_REPO   例: kq1kq1/obiduke-training-data （未設定なら機能OFF）
   HF_TOKEN             書き込み権限のあるHFトークン（Secretとして登録）
-  TRAINING_DATA_EVERY  何分ごとにHubへ送るか（省略時2分）
+  TRAINING_DATA_EVERY  タイマーで何分ごとにHubへ送るか（省略時30分）
+
+送信のタイミング:
+- PDFをダウンロードした瞬間に flush() で即送信する（＝その回の作業が終わった合図）。
+  通常はこれで送り終わるので、失われる分はほぼ無い。
+- 上記のタイマーは「確認したがダウンロードせずに閉じた」ときだけの保険。間隔を短くすると
+  コミットが増えてHub上の動作が重くなる（公式に数千コミットで劣化するとある）ので長めにする。
+- 送るものが無ければ何もコミットしない（空コミットは捨てられる）。使わない日は通信も起きない。
 """
 import hashlib
 import json
@@ -98,10 +105,11 @@ def _ensure_started():
             _records_path = LOCAL_DIR / RECORDS_SUBDIR / f"records_{uuid.uuid4().hex}.jsonl"
             _records_path.touch()
 
+            # 実送信はダウンロード時の flush() が主役。これは取りこぼし用の保険なので長めでよい。
             try:
-                every = float(os.environ.get("TRAINING_DATA_EVERY", "2"))
+                every = float(os.environ.get("TRAINING_DATA_EVERY", "30"))
             except ValueError:
-                every = 2.0
+                every = 30.0
 
             _scheduler = CommitScheduler(
                 repo_id=_repo_id,
@@ -122,6 +130,27 @@ def _ensure_started():
 def init():
     """起動時に呼ぶ。ネットワークを使うので呼び出し側は別スレッドにすること。"""
     _ensure_started()
+
+
+def flush():
+    """溜まっている分を今すぐHubへ送る（タイマーを待たない）。
+
+    PDFのダウンロード＝その回の作業が終わった合図なので、そこで呼ぶ。
+    タイマーを待つと、その間にSpaceが再起動したぶんが失われる。
+
+    trigger() は Future を返す非同期呼び出しなので、ダウンロードの応答は遅くならない。
+    送るものが無ければ何もコミットされない。まだ1件も保存していなければ
+    スケジューラ自体が動いていないので、ここでは起動もしない（無駄な通信を避ける）。
+    """
+    sched = _scheduler
+    if sched is None:
+        return False
+    try:
+        sched.trigger()
+        return True
+    except Exception as e:
+        print(f"[warn] 学習データの送信を要求できませんでした: {e}")
+        return False
 
 
 def _yolo_lines(boxes, img_w, img_h):

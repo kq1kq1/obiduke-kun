@@ -809,6 +809,12 @@ def download(job_id):
     first, *rest = pages
     first.save(buf, format="PDF", save_all=True, append_images=rest, quality=85)
     buf.seek(0)
+
+    # ダウンロード＝この回の作業が終わった合図。溜まった学習データを今のうちに送る。
+    # タイマー(既定30分)を待つと、その間にSpaceが再起動したぶんが失われる。
+    # 非同期なのでダウンロードの応答は遅くならない。
+    training_data.flush()
+
     return send_file(buf, as_attachment=True, download_name="obiduke_output.pdf",
                      mimetype="application/pdf")
 

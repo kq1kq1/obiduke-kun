@@ -16,6 +16,9 @@
 使い方:
     $env:HF_TOKEN = "hf_xxx"
     python tools/fetch_training_data.py kq1kq1/obiduke-training-data --out collected
+
+    # 取り出したあと、リポジトリの履歴を1コミットに畳む（コミット数が増え続けるのを防ぐ）
+    python tools/fetch_training_data.py kq1kq1/obiduke-training-data --out collected --squash
 """
 import argparse
 import json
@@ -65,6 +68,8 @@ def main():
     ap.add_argument("repo_id", help="例: kq1kq1/obiduke-training-data")
     ap.add_argument("--out", default="collected", help="出力フォルダ（既定: collected）")
     ap.add_argument("--cache", default=None, help="ダウンロード先（既定: HFのキャッシュ）")
+    ap.add_argument("--squash", action="store_true",
+                    help="取り出し後にリポジトリの履歴を1コミットに畳む（データは消えない・履歴のみ消える）")
     args = ap.parse_args()
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
@@ -74,7 +79,7 @@ def main():
         return 1
 
     try:
-        from huggingface_hub import snapshot_download
+        from huggingface_hub import HfApi, snapshot_download
     except ImportError:
         print("エラー: huggingface_hub が入っていません。 pip install huggingface_hub", file=sys.stderr)
         return 1
@@ -149,6 +154,25 @@ def main():
     print("bandラベルの規約を揃えていない既存データがあれば、先に")
     print("  python tools/relabel_band_fullwidth.py <既存データのルート>")
     print("を実行して全幅に揃えること（混ざると精度が落ちます）。")
+
+    if args.squash:
+        # データを取り出した直後に履歴を畳むと、コミット数が増え続けるのを防げる。
+        # 追記専用のデータ置き場なので履歴に価値はない。データ本体は消えない。
+        print()
+        print("履歴を1コミットに畳みます（データは消えません／履歴のみ消えます・取り消し不可）...")
+        if written == 0:
+            print("  中止: 1件も書き出せていないので畳みません（取り出しに失敗している可能性）。")
+            return 1
+        try:
+            HfApi(token=token).super_squash_history(
+                repo_id=args.repo_id, repo_type="dataset",
+                commit_message="学習データの取り出し後に履歴を整理",
+            )
+            print("  完了: リポジトリの履歴を整理しました。")
+        except Exception as e:
+            print(f"  失敗: {e}", file=sys.stderr)
+            print("  （データはHub上に残っています。畳めなかっただけなので次回また試せます）")
+            return 1
     return 0
 
 
