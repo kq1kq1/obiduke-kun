@@ -2,41 +2,41 @@
   "per_class": [
     {
       "cls": "band",
-      "tp": 25,
-      "fp_bad": 4,
-      "fp_dup": 7,
-      "fn": 3,
-      "recall": 0.8929,
-      "precision": 0.8621,
-      "f1": 0.8772,
-      "mean_iou": 0.9157
+      "tp": 28,
+      "fp_bad": 2,
+      "fp_dup": 0,
+      "fn": 0,
+      "recall": 1.0,
+      "precision": 0.9333,
+      "f1": 0.9655,
+      "mean_iou": 0.9221
     },
     {
       "cls": "logo",
-      "tp": 4,
-      "fp_bad": 1,
-      "fp_dup": 2,
-      "fn": 3,
-      "recall": 0.5714,
-      "precision": 0.8,
-      "f1": 0.6667,
-      "mean_iou": 0.8741
+      "tp": 7,
+      "fp_bad": 3,
+      "fp_dup": 0,
+      "fn": 0,
+      "recall": 1.0,
+      "precision": 0.7,
+      "f1": 0.8235,
+      "mean_iou": 0.8569
     },
     {
       "cls": "map",
       "tp": 20,
-      "fp_bad": 1,
+      "fp_bad": 3,
       "fp_dup": 0,
       "fn": 3,
       "recall": 0.8696,
-      "precision": 0.9524,
-      "f1": 0.9091,
-      "mean_iou": 0.9137
+      "precision": 0.8696,
+      "f1": 0.8696,
+      "mean_iou": 0.9336
     }
   ],
   "pages": 29,
-  "pages_missing_band": 2,
-  "pages_missing_band_rate": 0.069,
+  "pages_missing_band": 0,
+  "pages_missing_band_rate": 0.0,
   "model": "best.pt",
   "labels": "fullwidth",
   "conf": 0.3,
