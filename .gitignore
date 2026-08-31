@@ -33,3 +33,5 @@ training_images/
 training_data/
 # 学習データを取り出したもの（tools/fetch_training_data.py の出力）
 collected/
+# 学習・検証用データ（重い。GitにもHF Spacesにも上げない）
+datasets/
