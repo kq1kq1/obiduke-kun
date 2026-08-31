@@ -194,6 +194,9 @@ def main():
     ap.add_argument("--device", default=None, help="'0'でGPU、'cpu'でCPU（既定は自動）")
     ap.add_argument("--skip-train", action="store_true",
                     help="学習せず、既にある結果の採点だけやり直す")
+    ap.add_argument("--weights", default=None,
+                    help="採点する重みを直接指定する"
+                         "（学習は終わっているのに見つからないと言われたとき用）")
     args = ap.parse_args()
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
@@ -206,7 +209,9 @@ def main():
         return 1
     baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
 
-    work = Path(args.work)
+    # ultralyticsは project が相対パスだと runs/detect/ の下に置いてしまうので、
+    # 必ず絶対パスにしてから渡す（相対のままだと保存先が想定とズレる）
+    work = Path(args.work).resolve()
     work.mkdir(parents=True, exist_ok=True)
     ds = work / "dataset"
     weights = work / "train" / "weights" / "best.pt"
@@ -230,10 +235,27 @@ def main():
         model.train(data=str((ds / "data.yaml").resolve()), epochs=args.epochs,
                     imgsz=args.imgsz, project=str(work), name="train",
                     exist_ok=True, device=args.device)
+        # 実際の保存先をultralyticsから受け取る（推測しない）
+        try:
+            trained = Path(model.trainer.save_dir) / "weights" / "best.pt"
+            if trained.exists():
+                weights = trained
+        except Exception:
+            pass
 
+    if args.weights:
+        weights = Path(args.weights).resolve()
     if not weights.exists():
-        print(f"エラー: 学習結果が見つかりません: {weights}", file=sys.stderr)
-        return 1
+        # 保存先がズレていることがあるので探しに行く（学習は成功しているのに
+        # 「見つかりません」で止まるのを避ける）
+        found = sorted(Path.cwd().rglob("weights/best.pt"), key=lambda q: -q.stat().st_mtime)
+        if found:
+            weights = found[0]
+            print(f"[info] 想定の場所に無かったので、いちばん新しいものを使います: {weights}")
+        else:
+            print(f"エラー: 学習結果が見つかりません: {weights}", file=sys.stderr)
+            print("       --weights で直接指定してください。", file=sys.stderr)
+            return 1
 
     # ---- 凍結検証セットで採点（アプリと同条件） ----
     print("\n" + "=" * 64)
