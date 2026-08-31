@@ -28,6 +28,11 @@ FROZEN = Path("datasets/frozen_val")
 APP_CONF = 0.30
 IMGSZ = 640
 IOU_MATCH = 0.5
+# 正解に割り当てられなかった予測のうち、正解の枠とこれ以上重なっているものは
+# 「同じ対象への重複検出」とみなす。重複は実害が無い（帯は必ず全幅に広げて貼るので
+# 重なった2枚を貼っても結果は同じ。白塗りも同様）。ここを分けずに数えると、
+# 無害な重複のせいで適合率が悪く見えて、判断を誤る。
+DUP_OVERLAP = 0.10
 
 
 def load_gt(txt_path, w, h):
@@ -84,15 +89,15 @@ def match(gts, preds, y_only):
     return pairs
 
 
-def evaluate(model, images, label_dir, conf):
+def evaluate(model, images, label_dir, conf, imgsz=IMGSZ):
     from PIL import Image
-    stats = {n: {"tp": 0, "fp": 0, "fn": 0, "ious": []} for n in NAMES}
+    stats = {n: {"tp": 0, "fp_bad": 0, "fp_dup": 0, "fn": 0, "ious": []} for n in NAMES}
     pages_missing_band = 0
     for img_path in images:
         with Image.open(img_path) as im:
             im = im.convert("RGB")
             w, h = im.size
-            r = model.predict(im, imgsz=IMGSZ, conf=conf, verbose=False)[0]
+            r = model.predict(im, imgsz=imgsz, conf=conf, verbose=False)[0]
         preds = []
         for b in r.boxes:
             x0, y0, x1, y1 = (float(v) for v in b.xyxy[0])
@@ -103,12 +108,18 @@ def evaluate(model, images, label_dir, conf):
         for cid, name in enumerate(NAMES):
             g = [x for x in gts if x["cls"] == cid]
             p = [x for x in preds if x["cls"] == cid]
-            pairs = match(g, p, y_only=(name == "band"))
+            y_only = (name == "band")
+            pairs = match(g, p, y_only=y_only)
             hit = {i for i, _, _ in pairs if i is not None}
             stats[name]["tp"] += len(hit)
-            stats[name]["fp"] += sum(1 for i, _, _ in pairs if i is None)
             stats[name]["fn"] += len(g) - len(hit)
             stats[name]["ious"] += [v for i, _, v in pairs if i is not None]
+            for i, pr, _ in pairs:
+                if i is not None:
+                    continue
+                # 同じ対象への重複か、まったく別の場所かで分ける
+                ov = max([iou(x, pr, y_only) for x in g], default=0.0)
+                stats[name]["fp_dup" if ov > DUP_OVERLAP else "fp_bad"] += 1
 
         # 実務でいちばん困るケース: 正解に帯があるのに1つも出せなかったページ
         if any(x["cls"] == 0 for x in gts) and not any(x["cls"] == 0 for x in preds):
@@ -121,11 +132,13 @@ def summarize(stats, pages, missing):
     for n in NAMES:
         s = stats[n]
         rec = s["tp"] / (s["tp"] + s["fn"]) if (s["tp"] + s["fn"]) else 0.0
-        pre = s["tp"] / (s["tp"] + s["fp"]) if (s["tp"] + s["fp"]) else 0.0
+        # 適合率は「実害のある誤検出」だけで計算する（重複は結果が変わらないので数えない）
+        den = s["tp"] + s["fp_bad"]
+        pre = s["tp"] / den if den else 0.0
         f1 = 2 * rec * pre / (rec + pre) if (rec + pre) else 0.0
         mi = sum(s["ious"]) / len(s["ious"]) if s["ious"] else 0.0
-        rows.append({"cls": n, "tp": s["tp"], "fp": s["fp"], "fn": s["fn"],
-                     "recall": round(rec, 4), "precision": round(pre, 4),
+        rows.append({"cls": n, "tp": s["tp"], "fp_bad": s["fp_bad"], "fp_dup": s["fp_dup"],
+                     "fn": s["fn"], "recall": round(rec, 4), "precision": round(pre, 4),
                      "f1": round(f1, 4), "mean_iou": round(mi, 4)})
     return {"per_class": rows, "pages": pages,
             "pages_missing_band": missing,
@@ -139,6 +152,10 @@ def main():
                     help="採点に使うラベルの規約（既定: orig＝Roboflowのまま）")
     ap.add_argument("--save", default=None, help="結果をJSONで保存するパス")
     ap.add_argument("--sweep", action="store_true", help="確信度しきい値を振って比べる")
+    ap.add_argument("--imgsz", type=int, default=IMGSZ,
+                    help="推論解像度。detect.py と揃えるのが基本（既定 %d）" % IMGSZ)
+    ap.add_argument("--imgsz-sweep", action="store_true",
+                    help="推論解像度を振って比べる（学習解像度を決めるとき用）")
     args = ap.parse_args()
 
     img_dir = FROZEN / "images"
@@ -157,35 +174,53 @@ def main():
     conv = "band=全幅・案B" if args.labels == "fullwidth" else "帯にぴったり・現行"
     print(f"モデル      : {args.model}")
     print(f"ラベル規約  : {args.labels}（{conv}）")
-    print(f"検証セット  : {len(images)}枚  conf={APP_CONF} imgsz={IMGSZ}（アプリと同条件）")
+    same = "（アプリと同条件）" if args.imgsz == IMGSZ else f"（アプリは {IMGSZ}）"
+    print(f"検証セット  : {len(images)}枚  conf={APP_CONF} imgsz={args.imgsz}{same}")
     print()
 
-    stats, missing = evaluate(model, images, label_dir, APP_CONF)
+    stats, missing = evaluate(model, images, label_dir, APP_CONF, args.imgsz)
     res = summarize(stats, len(images), missing)
 
-    header = "クラス      正解  誤検出  見逃し    再現率    適合率      F1   平均IoU"
+    header = "クラス      正解  実害誤検出  重複  見逃し    再現率    適合率      F1"
     print(header)
-    print("-" * len(header))
+    print("-" * 68)
     for r in res["per_class"]:
-        note = "  ← y方向のみで判定" if r["cls"] == "band" else ""
-        print(f"{r['cls']:<8}{r['tp']:>6}{r['fp']:>8}{r['fn']:>8}"
+        note = "  ← y方向のみ" if r["cls"] == "band" else ""
+        print(f"{r['cls']:<8}{r['tp']:>6}{r['fp_bad']:>12}{r['fp_dup']:>6}{r['fn']:>8}"
               f"{r['recall']:>10.3f}{r['precision']:>10.3f}"
-              f"{r['f1']:>8.3f}{r['mean_iou']:>10.3f}{note}")
+              f"{r['f1']:>8.3f}{note}")
+    print()
+    print("  実害誤検出 = 関係ない場所を白塗りしてしまう分（人が気づかないと事故になる）")
+    print("  重複       = 同じ対象を二重に検出した分（全幅に広げて貼るので結果は同じ・無害）")
     print()
     print(f"帯を1つも出せなかったページ: {res['pages_missing_band']} / {res['pages']} "
           f"({res['pages_missing_band_rate'] * 100:.1f}%)  ← 赤い「未検出」になる分")
 
+    if args.imgsz_sweep:
+        print()
+        print("推論解像度を振ったとき（conf=%.2f）:" % APP_CONF)
+        hdr = "  imgsz   band再現  band実害  logo再現  logo実害   map再現  map実害   帯なし"
+        print(hdr)
+        for z in (640, 800, 960, 1280):
+            st, ms = evaluate(model, images, label_dir, APP_CONF, z)
+            r = summarize(st, len(images), ms)
+            g = {x["cls"]: x for x in r["per_class"]}
+            mark = "  ← 今" if z == IMGSZ else ""
+            print(f"  {z:>5}  {g['band']['recall']:>8.3f} {g['band']['fp_bad']:>9}"
+                  f"  {g['logo']['recall']:>8.3f} {g['logo']['fp_bad']:>9}"
+                  f"  {g['map']['recall']:>8.3f} {g['map']['fp_bad']:>9}"
+                  f"  {r['pages_missing_band']:>7}{mark}")
+
     if args.sweep:
         print()
         print("確信度しきい値を振ったときの band:")
-        print("    conf    再現率    適合率  誤検出")
-        for c in (0.15, 0.20, 0.25, 0.30, 0.40, 0.50):
-            st, _ = evaluate(model, images, label_dir, c)
+        print("    conf    再現率  実害誤検出   重複")
+        for c in (0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60):
+            st, _ = evaluate(model, images, label_dir, c, args.imgsz)
             s = st["band"]
             rec = s["tp"] / (s["tp"] + s["fn"]) if (s["tp"] + s["fn"]) else 0.0
-            pre = s["tp"] / (s["tp"] + s["fp"]) if (s["tp"] + s["fp"]) else 0.0
             mark = "  ← 今の設定" if abs(c - APP_CONF) < 1e-9 else ""
-            print(f"  {c:>6.2f}{rec:>10.3f}{pre:>10.3f}{s['fp']:>8}{mark}")
+            print(f"  {c:>6.2f}{rec:>10.3f}{s['fp_bad']:>12}{s['fp_dup']:>7}{mark}")
 
     if args.save:
         out = Path(args.save)
@@ -193,7 +228,7 @@ def main():
         res["model"] = args.model
         res["labels"] = args.labels
         res["conf"] = APP_CONF
-        res["imgsz"] = IMGSZ
+        res["imgsz"] = args.imgsz
         out.write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\n保存: {out}")
     return 0
