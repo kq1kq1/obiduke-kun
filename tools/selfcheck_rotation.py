@@ -7,7 +7,7 @@
 あわせて確認すること:
   - 元画像(_orig)を書き換えていないか（回すほど画質が落ちるのを防ぐ設計）
   - 何周回しても結果が同じバイト列か（劣化が積み重ならないこと）
-  - 回転で枠と確認済みが解除されるか
+  - 回転で枠と記録済みの印が解除されるか
   - 縦横が混ざったPDFが出せるか
 
 使い方（リポジトリのルートで）:
@@ -85,9 +85,10 @@ def load_meta():
         return json.load(f)[0]
 
 
-print("== まず確認済みにしておく（回転で外れることを見るため） ==")
-eq("confirm", client.post(f"/confirm_page/{job}/0").get_json().get("ok"), True)
-eq("確認済み", sorted(app._load_confirmed(job)), [0])
+print("== まず記録済みにしておく（回転で外れることを見るため） ==")
+# 学習データに記録した印を付ける（通常はダウンロード時の抜き取り or 枠の修正で付く）
+app._mark_recorded(job, 0)
+eq("記録済み", sorted(app._load_recorded(job)), [0])
 
 print("\n== 右90度に回す ==")
 r = client.post(f"/rotate_page/{job}/0", json={"delta": 90})
@@ -99,7 +100,7 @@ eq("metaの回転角", load_meta()["rotation"], 90)
 eq("metaの縦横", (load_meta()["img_w"], load_meta()["img_h"]), (H, W))
 eq("枠は消える", load_meta()["detections"], [])
 eq("未検出になる", load_meta()["missed"], True)
-eq("確認済みが外れる", sorted(app._load_confirmed(job)), [])
+eq("記録済みの印が外れる", sorted(app._load_recorded(job)), [])
 print(f"  推奨位置: {len(d.get('suggestions', []))}件（合成画像なので0でも正常）")
 
 print("\n== 元画像は書き換わっていないか（回すほど劣化するのを防ぐ設計） ==")

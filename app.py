@@ -8,6 +8,7 @@ import io
 import uuid
 import json
 import time
+import random
 import shutil
 import threading
 
@@ -48,6 +49,21 @@ for d in (DIR_OWN_BANDS, DIR_UPLOAD, DIR_OUTPUT):
     os.makedirs(d, exist_ok=True)
 
 ALLOWED_BAND_EXT = (".png", ".jpg", ".jpeg")
+
+# 正しく処理できたページのうち、どれくらいを学習データに入れるか。
+#
+# 直したページばかり貯めると「モデルが間違える場面」だけのデータになり、
+# 正しく当たっている場面を忘れる方向に学習が進む（誤検出が増える）。
+# 逆に全部入れると簡単な成功例で埋まって、直すべき事例の影響が薄まる。
+# 修正が全体の1〜2割なので、残りから2割ほど抜くと両者がだいたい同数になる。
+#
+# 抜き取るのはダウンロードの瞬間だけ。＝この出力で良いと人が判断した合図なので、
+# レビュー中に記録して後から削除・修正されるのを避けられる。
+try:
+    TRAINING_SAMPLE_RATE = float(os.environ.get("TRAINING_SAMPLE_RATE", "0.2"))
+except ValueError:
+    TRAINING_SAMPLE_RATE = 0.2
+TRAINING_SAMPLE_RATE = max(0.0, min(1.0, TRAINING_SAMPLE_RATE))
 
 
 # ============================================
@@ -551,21 +567,21 @@ def _load_order(job_id, default_indices):
     return valid
 
 
-def _confirmed_path(job_id):
+def _recorded_path(job_id):
     return os.path.join(DIR_OUTPUT, job_id + "_confirmed.json")
 
 
-# 確認済みリストは「読んで足して書く」ので、同時アクセスで消えないようロックする
-confirmed_lock = threading.Lock()
+# 記録済みリストは「読んで足して書く」ので、同時アクセスで消えないようロックする
+recorded_lock = threading.Lock()
 
 # meta.jsonは「読む→書き換える→保存する」なので、同じジョブを同時に触られると
 # 片方の変更が消える。書き込みは一瞬なのでジョブごとに分けず1つで直列化して十分。
 meta_lock = threading.Lock()
 
 
-def _load_confirmed(job_id):
-    """学習データとして記録済みのpage_indexの集合を返す。"""
-    path = _confirmed_path(job_id)
+def _load_recorded(job_id):
+    """学習データとして既に記録したpage_indexの集合を返す（二重記録を防ぐため）。"""
+    path = _recorded_path(job_id)
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as f:
@@ -575,29 +591,29 @@ def _load_confirmed(job_id):
     return set()
 
 
-def _mark_confirmed(job_id, page_index):
-    """ページを確認済みとして記録する（リロード後もチェックが残るように）。"""
-    with confirmed_lock:
-        done = _load_confirmed(job_id)
+def _mark_recorded(job_id, page_index):
+    """このページは学習データに記録した、と印を付ける（同じページを二度送らないため）。"""
+    with recorded_lock:
+        done = _load_recorded(job_id)
         done.add(int(page_index))
         try:
-            with open(_confirmed_path(job_id), "w", encoding="utf-8") as f:
+            with open(_recorded_path(job_id), "w", encoding="utf-8") as f:
                 json.dump(sorted(done), f)
         except Exception as e:
             print(f"[warn] 確認済みの記録に失敗 {job_id}/{page_index}: {e}")
 
 
-def _unmark_confirmed(job_id, page_index):
-    """確認済みの印を外す（回転すると中身が変わるので、確認し直してもらう）。
+def _unmark_recorded(job_id, page_index):
+    """記録済みの印を外す（回転すると中身が変わるので、記録し直せるようにする）。
 
-    既に送った学習データは追記式なので取り消せない。回す前に✓を押していた場合、
-    回転前の画像に対する記録がそのまま残る。運用上は「回してから✓」を促す。
+    既に送った学習データは追記式なので取り消せない。回転前の画像に対する記録が
+    残ることはあるが、回転後の画像は別物として新しく記録される。
     """
-    with confirmed_lock:
-        done = _load_confirmed(job_id)
+    with recorded_lock:
+        done = _load_recorded(job_id)
         done.discard(int(page_index))
         try:
-            with open(_confirmed_path(job_id), "w", encoding="utf-8") as f:
+            with open(_recorded_path(job_id), "w", encoding="utf-8") as f:
                 json.dump(sorted(done), f)
         except Exception as e:
             print(f"[warn] 確認済みの解除に失敗 {job_id}/{page_index}: {e}")
@@ -680,8 +696,8 @@ def review(job_id):
         missed_count=missed_count,
         ok_count=ok_count,
         total=len(page_results),
-        confirmed=sorted(_load_confirmed(job_id)),
         training=training_data.status(),
+        sample_rate=TRAINING_SAMPLE_RATE,
     )
 
 
@@ -826,45 +842,9 @@ def edit_page(job_id, page_index):
     # 人が直した枠は最良の教師データ。次の再学習に回せるよう記録する。
     # ここでの失敗は利用者の作業に影響させない（saved=falseを返すだけ）。
     saved = _send_training_data(job_id, page_index, page_meta, rects, w, h, edited=True)
-    _mark_confirmed(job_id, page_index)
+    _mark_recorded(job_id, page_index)
 
     return jsonify({"ok": True, "ts": int(time.time()), "missed": missed, "saved": saved})
-
-
-@app.route("/confirm_page/<job_id>/<int:page_index>", methods=["POST"])
-def confirm_page(job_id, page_index):
-    """「このページはこれでOK」を記録し、学習データとして送る。
-
-    人が目で見て正しいと確認したページは、検出結果をそのまま正解として使える。
-    誤検出（関係ない場所への白塗り）を減らすには、こういう「合っている例」と
-    「ここには何も無い例」がどうしても必要になる。
-    自動では貯めない。人が確認したものだけを貯めないと、モデル自身の間違いを
-    そのまま教え込んで精度が上がらなくなる。
-    """
-    meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
-    if not os.path.exists(meta_path):
-        return jsonify({"error": "ジョブが見つかりません"}), 404
-    try:
-        with open(meta_path, encoding="utf-8") as f:
-            meta = json.load(f)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    page_meta = next((p for p in meta if p["page_index"] == page_index), None)
-    if page_meta is None:
-        return jsonify({"error": "ページが見つかりません"}), 404
-
-    saved = _send_training_data(
-        job_id,
-        page_index,
-        page_meta,
-        page_meta.get("detections", []),
-        page_meta.get("img_w") or 0,
-        page_meta.get("img_h") or 0,
-        edited=False,
-    )
-    _mark_confirmed(job_id, page_index)
-    return jsonify({"ok": True, "saved": saved})
 
 
 def _job_opts_path(job_id):
@@ -950,7 +930,7 @@ def rotate_page(job_id, page_index):
         return jsonify({"error": str(e)}), 500
 
     # 中身が変わったので確認し直してもらう
-    _unmark_confirmed(job_id, page_index)
+    _unmark_recorded(job_id, page_index)
 
     # 回した向きでもう一度だけ検出して推奨位置を出す（自動では貼らない）
     suggestions = []
@@ -971,6 +951,44 @@ def rotate_page(job_id, page_index):
 
     return jsonify({"ok": True, "rotation": rotation, "img_w": w, "img_h": h,
                     "suggestions": suggestions, "ts": int(time.time())})
+
+
+def _sample_untouched_pages(job_id, meta, order, deleted):
+    """出力に入った「直さなかったページ」から一部を抜き取って学習データにする。
+
+    ダウンロード＝この出力で良いと人が判断した合図。ここで初めて記録するので、
+    レビュー中に消したり直したりしたページが混ざらない。
+
+    人に✓を押させるのはやめた。押すのが手間だと誰も押さず、結果として
+    「モデルが間違えた例」しか貯まらなくなる。それだと正しく当たっている場面を
+    忘れる方向に学習が進むので、成功例が一定量あることのほうが大事。
+
+    全部ではなく一部にするのは、簡単な成功例で埋めて直すべき事例の影響を
+    薄めないため（割合は TRAINING_SAMPLE_RATE）。
+    """
+    if TRAINING_SAMPLE_RATE <= 0 or not training_data.is_configured():
+        return 0
+    done = _load_recorded(job_id)
+    by_index = {p["page_index"]: p for p in meta}
+    picked = 0
+    for idx in order:
+        if idx in deleted or idx in done:
+            continue
+        page_meta = by_index.get(idx)
+        if page_meta is None:
+            continue
+        if random.random() < TRAINING_SAMPLE_RATE:
+            if _send_training_data(job_id, idx, page_meta,
+                                   page_meta.get("detections", []),
+                                   page_meta.get("img_w") or 0,
+                                   page_meta.get("img_h") or 0,
+                                   edited=False):
+                picked += 1
+        # 抜かなかったページにも印を付ける。付けないと、2回目のダウンロードで
+        # また抽選し直すことになり、何度も落とすうちに割合が100%に近づいてしまう。
+        # 「もう検討した」の印なので、回転すると外れて再度対象になる（それは正しい）。
+        _mark_recorded(job_id, idx)
+    return picked
 
 
 @app.route("/download/<job_id>")
@@ -1002,6 +1020,11 @@ def download(job_id):
     first, *rest = pages
     first.save(buf, format="PDF", save_all=True, append_images=rest, quality=85)
     buf.seek(0)
+
+    # 直さなかったページから一部を抜き取って学習データに入れる（成功例の確保）
+    picked = _sample_untouched_pages(job_id, meta, order, deleted)
+    if picked:
+        print(f"[info] {job_id}: 正しく処理できたページから {picked}件を学習データに記録")
 
     # ダウンロード＝この回の作業が終わった合図。溜まった学習データを今のうちに送る。
     # タイマー(既定30分)を待つと、その間にSpaceが再起動したぶんが失われる。
