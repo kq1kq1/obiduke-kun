@@ -44,13 +44,27 @@ def to_fullwidth(line):
     return "%d %.6f %.6f %.6f %.6f" % (cid, 0.5, yc, 1.0, h)
 
 
-def copy_split(src_img_dir, src_lbl_dir, dst_root, relabel):
-    """画像とラベルを1組コピーする。relabel=Trueならbandを全幅に直す。"""
+def name_key(filename):
+    """Roboflowが付けるハッシュを除いた識別子（tools/freeze_val_set.py と同じ規則）。"""
+    return Path(filename).stem.split(".rf.")[0]
+
+
+def copy_split(src_img_dir, src_lbl_dir, dst_root, relabel, exclude_keys=None):
+    """画像とラベルを1組コピーする。relabel=Trueならbandを全幅に直す。
+
+    exclude_keys に検証用の識別子を渡すと、それらは学習分から外す。
+    Roboflowで版を作り直すと検証用の画像がtrainに割り当てられることがあり、
+    そのまま学習に入れると基準スコアが甘く出て比較にならなくなるため。
+    """
     (dst_root / "images").mkdir(parents=True, exist_ok=True)
     (dst_root / "labels").mkdir(parents=True, exist_ok=True)
     n = 0
+    skipped = 0
     for img in sorted(src_img_dir.iterdir()):
         if img.suffix.lower() not in (".jpg", ".jpeg", ".png"):
+            continue
+        if exclude_keys and name_key(img.name) in exclude_keys:
+            skipped += 1
             continue
         lbl = src_lbl_dir / (img.stem + ".txt")
         if not lbl.exists():
@@ -62,7 +76,7 @@ def copy_split(src_img_dir, src_lbl_dir, dst_root, relabel):
         (dst_root / "labels" / lbl.name).write_text(
             ("\n".join(lines) + "\n") if lines else "", encoding="utf-8")
         n += 1
-    return n
+    return n, skipped
 
 
 def main():
@@ -91,17 +105,20 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp) / "base"
 
+        # 検証用の画像は学習分から必ず外す。Roboflowで版を作り直すと検証用が
+        # trainに割り当てられることがあり、混ざるとスコアが甘く出て比較にならない。
+        val_keys = {name_key(p.name) for p in (FROZEN / "images").iterdir()}
+
         # 学習分: bandを全幅に揃えてから置く（アプリが貯めるラベルと規約を合わせるため）
-        n_train = copy_split(rf / "train" / "images", rf / "train" / "labels",
-                             base / "train", relabel=True)
+        n_train, skipped = copy_split(rf / "train" / "images", rf / "train" / "labels",
+                                      base / "train", relabel=True, exclude_keys=val_keys)
         # 検証分: 凍結セットの全幅版ラベルをそのまま使う
-        n_val = copy_split(FROZEN / "images", FROZEN / "labels_fullwidth",
-                           base / "frozen_val", relabel=False)
+        n_val, _ = copy_split(FROZEN / "images", FROZEN / "labels_fullwidth",
+                              base / "frozen_val", relabel=False)
 
         # 検証画像が学習分に混ざっていないか（混ざると基準スコアが甘く出て比較にならない）
-        train_names = {p.name for p in (base / "train" / "images").iterdir()}
-        val_names = {p.name for p in (base / "frozen_val" / "images").iterdir()}
-        overlap = train_names & val_names
+        train_keys = {name_key(p.name) for p in (base / "train" / "images").iterdir()}
+        overlap = train_keys & val_keys
         if overlap:
             print(f"エラー: 検証用の画像が学習分にも入っています（{len(overlap)}件）。"
                   f"例: {sorted(overlap)[:3]}", file=sys.stderr)
@@ -118,7 +135,8 @@ def main():
             "全幅へ広げるため、規約を揃えないと学習が濁る。\n",
             encoding="utf-8")
 
-        print(f"学習分   : {n_train}枚（bandを全幅に統一）")
+        print(f"学習分   : {n_train}枚（bandを全幅に統一）"
+              + (f" ※検証用と重なる {skipped}枚を除外" if skipped else ""))
         print(f"検証分   : {n_val}枚（凍結セット・学習には使わない）")
         print(f"重複なし : OK")
 
