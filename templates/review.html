@@ -102,6 +102,22 @@
   .thumb-card.manually-done { border-color: var(--ok); }
   .thumb-card.selected { border-color: #2255cc; box-shadow: 0 0 0 2px #2255cc; }
 
+  /* 学習データとして記録済みのしるし */
+  .thumb-confirm {
+    position: absolute; bottom: 6px; right: 6px; z-index: 3;
+    width: 27px; height: 27px; border-radius: 50%; padding: 0;
+    border: 1.5px solid var(--border); background: rgba(255,255,255,0.94);
+    color: var(--text-muted); font-size: 0.9rem; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+  }
+  .thumb-confirm:hover { border-color: var(--ok); color: var(--ok); background: #fff; }
+  .thumb-confirm:disabled { cursor: default; opacity: 0.6; }
+  .thumb-card.confirmed .thumb-confirm {
+    background: var(--ok); border-color: var(--ok); color: #fff; cursor: default;
+  }
+  .stat-learn { background: #4a5ba8; color: #fff; }
+
   /* 選択ツールバー */
   .sel-toolbar {
     display: none; align-items: center; gap: 14px;
@@ -177,17 +193,22 @@
     display: block; max-width: 100%; max-height: calc(94vh - 170px); object-fit: contain;
   }
 
-  /* 編集ボックス（帯=橙 / 白塗り=赤） */
+  /* 編集ボックス（帯=橙 / ロゴ=赤 / 案内図=青 / その他=灰）。
+     色はクラスごとに分ける。再学習のラベルになるので、何を指した枠かが見て分かる必要がある。 */
   .ebox { position: absolute; box-sizing: border-box; cursor: move; }
-  .ebox.band { border-top: 3px solid #e8a020; border-bottom: 3px solid #e8a020; background: rgba(232,160,32,0.22); }
-  .ebox.wo   { border: 2.5px solid #c84b2f; background: rgba(200,75,47,0.20); }
-  .ebox.sel  { box-shadow: 0 0 0 2px #2255cc; z-index: 5; }
+  .ebox.band  { border-top: 3px solid #e8a020; border-bottom: 3px solid #e8a020; background: rgba(232,160,32,0.22); }
+  .ebox.logo  { border: 2.5px solid #c84b2f; background: rgba(200,75,47,0.20); }
+  .ebox.map   { border: 2.5px solid #2a6f8f; background: rgba(42,111,143,0.20); }
+  .ebox.other { border: 2.5px dashed #6b6560; background: rgba(107,101,96,0.18); }
+  .ebox.sel   { box-shadow: 0 0 0 2px #2255cc; z-index: 5; }
   .ebox-tag {
     position: absolute; top: 0; left: 0; font-size: 0.62rem; font-weight: 700;
     color: #fff; padding: 1px 5px; line-height: 1.4; white-space: nowrap;
   }
-  .ebox.band .ebox-tag { background: #e8a020; }
-  .ebox.wo   .ebox-tag { background: #c84b2f; }
+  .ebox.band  .ebox-tag { background: #e8a020; }
+  .ebox.logo  .ebox-tag { background: #c84b2f; }
+  .ebox.map   .ebox-tag { background: #2a6f8f; }
+  .ebox.other .ebox-tag { background: #6b6560; }
   .ebox-del {
     position: absolute; top: -11px; right: -11px; width: 22px; height: 22px;
     border-radius: 50%; border: 2px solid #fff; background: #1a1714; color: #fff;
@@ -209,7 +230,7 @@
   .h-se { bottom: -7px; right: -7px; cursor: nwse-resize; }
 
   .modal-panel {
-    width: 230px; flex-shrink: 0; border-left: 1px solid var(--border);
+    width: 252px; flex-shrink: 0; border-left: 1px solid var(--border);
     padding: 18px 14px; display: flex; flex-direction: column; gap: 14px;
     overflow-y: auto; background: var(--surface);
   }
@@ -222,17 +243,47 @@
     padding: 10px 12px; font-size: 0.76rem; line-height: 1.7; color: #7a6820;
   }
   .add-row { display: flex; gap: 8px; }
+  .add-row + .add-row { margin-top: 8px; }
   .btn-add {
     flex: 1; padding: 9px 6px; border: 1.5px solid var(--border); border-radius: 7px;
     background: #fff; cursor: pointer; font-size: 0.8rem; font-weight: 700;
-    color: var(--text); transition: all 0.15s;
+    color: var(--text); transition: all 0.15s; border-left-width: 5px;
   }
   .btn-add:hover { background: var(--bg); }
+  .btn-add.c-band  { border-left-color: #e8a020; }
+  .btn-add.c-logo  { border-left-color: #c84b2f; }
+  .btn-add.c-map   { border-left-color: #2a6f8f; }
+  .btn-add.c-other { border-left-color: #6b6560; }
+  .btn-rot { border-left-width: 1.5px; font-size: 0.82rem; }
+  .btn-rot:disabled { opacity: 0.5; cursor: default; }
+  .rot-note {
+    margin-top: 7px; font-size: 0.71rem; line-height: 1.6; color: var(--text-muted);
+  }
   .box-info {
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
     padding: 10px 12px; font-size: 0.8rem; line-height: 1.7;
   }
   .box-info .muted { color: var(--text-muted); font-size: 0.74rem; }
+  .cls-select {
+    width: 100%; margin-top: 8px; padding: 7px 8px; font-size: 0.8rem;
+    border: 1.5px solid var(--border); border-radius: 6px; background: #fff;
+    color: var(--text); font-family: inherit;
+  }
+  .cls-select:disabled { background: var(--bg); color: var(--text-muted); }
+
+  .btn-confirm-modal {
+    background: #fff; color: var(--ok); border: 1.5px solid var(--ok);
+    padding: 10px 14px; border-radius: 7px; font-size: 0.85rem; font-weight: 700;
+    cursor: pointer; width: 100%; transition: all 0.15s;
+  }
+  .btn-confirm-modal:hover:not(:disabled) { background: var(--ok-light); }
+  .btn-confirm-modal:disabled { color: var(--text-muted); border-color: var(--border); cursor: default; }
+
+  .learn-note {
+    background: #eef0fb; border: 1px solid #c6cdec; border-radius: 6px;
+    padding: 9px 11px; font-size: 0.73rem; line-height: 1.65; color: #3a4478;
+  }
+  .learn-note.off { background: var(--bg); border-color: var(--border); color: var(--text-muted); }
 
   .btn-apply {
     background: var(--ok); color: #fff; border: none;
@@ -271,6 +322,7 @@
   <div class="header-right">
     <span class="stat-badge stat-miss" id="hdr-miss">未検出 {{ missed_count }}ページ</span>
     <span class="stat-badge stat-ok" id="hdr-ok">検出済 {{ ok_count }}ページ</span>
+    <span class="stat-badge stat-learn" id="hdr-learn">学習に記録 {{ confirmed|length }}ページ</span>
     <a href="/download/{{ job_id }}" class="btn-download">⬇ PDFをダウンロード</a>
     <a href="/" class="btn-back-top">◀ トップに戻る</a>
   </div>
@@ -281,8 +333,22 @@
   <div class="reorder-hint">
     🔀 カードを<b>ドラッグ</b>すると出力PDFのページ順を入れ替え。
     <b>クリック</b>で帯・白塗りの確認・修正（赤＝帯未検出）。<br>
-    ✅ <b>Ctrl（⌘）＋クリック</b>で複数選択（青枠）→ <b>Deleteキーで削除</b>、選択分を<b>ドラッグで一斉移動</b>もできます。
+    ✅ <b>Ctrl（⌘）＋クリック</b>で複数選択（青枠）→ <b>Deleteキーで削除</b>、選択分を<b>ドラッグで一斉移動</b>もできます。<br>
+    🎓 サムネ右下の<b>✓</b>は「これで正しい」の記録。押したページは<b>次回の再学習の教材</b>になり、使うほど検出精度が上がります（修正して貼り直したページは自動で記録されます）。
   </div>
+
+  {% if training.enabled %}
+  <div class="learn-note" style="margin-bottom:20px">
+    学習データの記録先: <b>{{ training.repo }}</b>（private・非公開）。
+    確認したページの<b>帯を貼る前の画像</b>と枠の座標を送ります。マイソクの内容が含まれるため、
+    リポジトリは必ず非公開のままにしてください。
+  </div>
+  {% else %}
+  <div class="learn-note off" style="margin-bottom:20px">
+    学習データの記録先が未設定のため、✓は<b>確認マークとしてのみ</b>残ります（外部への送信はしません）。
+    {% if training.reason %}<br>理由: {{ training.reason }}{% endif %}
+  </div>
+  {% endif %}
 
   <div class="sel-toolbar" id="sel-toolbar">
     <span class="sel-count" id="sel-count">0枚選択中</span>
@@ -292,13 +358,18 @@
 
   <div class="thumb-grid" id="page-grid">
     {% for p in pages %}
-    <div class="thumb-card {{ 'missed' if p.missed else 'ok' }}" id="card-{{ p.page_index }}"
+    <div class="thumb-card {{ 'missed' if p.missed else 'ok' }}{{ ' confirmed' if p.page_index in confirmed else '' }}"
+         id="card-{{ p.page_index }}"
          draggable="true" data-page="{{ p.page_index }}">
       <div class="order-num" id="ordnum-{{ p.page_index }}">{{ loop.index }}</div>
       <div class="thumb-img-wrap" onclick="onCardClick(event, {{ p.page_index }}, '{{ p.page_label }}', {{ 'true' if p.missed else 'false' }})">
         <img src="/thumb_all/{{ job_id }}/{{ p.page_index }}" id="thumb-{{ p.page_index }}" alt="{{ p.page_label }}"
              onload="setCardOrientation(this, 'card-{{ p.page_index }}')" draggable="false">
         <div class="thumb-status {{ 'status-miss' if p.missed else 'status-ok' }}" id="badge-{{ p.page_index }}">{{ '未検出' if p.missed else '検出済' }}</div>
+        <button class="thumb-confirm" id="confirm-{{ p.page_index }}" type="button" draggable="false"
+                title="{{ '記録済み' if p.page_index in confirmed else 'これで正しい（学習データに記録）' }}"
+                onmousedown="event.stopPropagation()"
+                onclick="onConfirmClick(event, {{ p.page_index }})">✓</button>
       </div>
       <div class="thumb-label" id="label-{{ p.page_index }}">{{ p.page_label }}</div>
     </div>
@@ -332,25 +403,51 @@
           <div class="panel-label">操作方法</div>
           <div class="instruction-box">
             枠を<b>ドラッグで移動</b>、青いハンドルで<b>サイズ変更</b>、<b>×で削除</b>。<br>
-            <b style="color:#c88010">橙＝自社帯</b> / <b style="color:#c84b2f">赤＝白塗り</b>。<br>
+            <b style="color:#c88010">橙＝帯（自社帯に差し替え）</b><br>
+            <b style="color:#c84b2f">赤＝ロゴ</b> / <b style="color:#2a6f8f">青＝案内図</b> / <b style="color:#6b6560">灰＝その他</b>（白塗りのみ）<br>
             背景は帯を貼る前の元画像です。
+          </div>
+        </div>
+        <div>
+          <div class="panel-label">ページの向き</div>
+          <div class="add-row">
+            <button class="btn-add btn-rot" type="button" onclick="rotatePage(-90)">↺ 左90°</button>
+            <button class="btn-add btn-rot" type="button" onclick="rotatePage(90)">↻ 右90°</button>
+          </div>
+          <div class="rot-note">
+            横向きで登録された図面を直せます。<b>回すと枠は引き直し</b>になり、
+            もう一度だけ検出して推奨位置を出します。✓を押すのは回転を済ませてから。
           </div>
         </div>
         <div>
           <div class="panel-label">枠を追加</div>
           <div class="add-row">
-            <button class="btn-add" type="button" onclick="addBand()">＋ 帯</button>
-            <button class="btn-add" type="button" onclick="addWhiteout()">＋ 白塗り</button>
+            <button class="btn-add c-band" type="button" onclick="addBox('band')">＋ 帯</button>
+            <button class="btn-add c-logo" type="button" onclick="addBox('logo')">＋ ロゴ</button>
+          </div>
+          <div class="add-row">
+            <button class="btn-add c-map" type="button" onclick="addBox('map')">＋ 案内図</button>
+            <button class="btn-add c-other" type="button" onclick="addBox('other')">＋ その他</button>
           </div>
         </div>
         <div>
           <div class="panel-label">現在の状態</div>
           <div class="box-info" id="box-info"><span class="muted">…</span></div>
+          <select class="cls-select" id="cls-select" onchange="changeCls(this.value)" disabled>
+            <option value="">選択中の枠の種類…</option>
+            <option value="band">帯（自社帯に差し替え）</option>
+            <option value="logo">ロゴ</option>
+            <option value="map">案内図</option>
+            <option value="other">その他（学習には使わない）</option>
+          </select>
         </div>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:auto">
           <button class="btn-apply" id="btn-apply" onclick="applyEdits()">
             <div class="spinner" id="spinner"></div>
             <span id="btn-text">適用して貼り直す</span>
+          </button>
+          <button class="btn-confirm-modal" id="btn-confirm-modal" onclick="confirmFromModal()">
+            ✓ 修正不要（このままでOK）
           </button>
           <button class="btn-cancel-modal" onclick="closeModal()">閉じる</button>
         </div>
@@ -363,6 +460,16 @@
 <script>
 const JOB_ID = "{{ job_id }}";
 const PAGE_DATA = {{ page_data|tojson }};  // idx -> [{cls,x0,y0,x1,y1(比率)}, ...]
+const TRAINING_ON = {{ 'true' if training.enabled else 'false' }};
+// 学習データとして記録済みのページ（リロードしてもチェックが残る）
+const confirmedSet = new Set({{ confirmed|tojson }});
+
+// 枠の種類。サーバ側の BOX_CLASSES と必ず揃える。
+// band=自社帯に差し替え、logo/map=白塗り＋学習ラベル、other=白塗りのみ（学習には使わない）
+const CLS_LIST  = ['band', 'logo', 'map', 'other'];
+const CLS_LABEL = { band: '帯', logo: 'ロゴ', map: '案内図', other: '白塗り' };
+function normCls(c) { return CLS_LIST.includes(c) ? c : 'other'; }
+
 let curPage = null;
 let boxes = [];        // [{cls,x0,y0,x1,y1}] 比率(0..1)
 let selIdx = -1;
@@ -375,14 +482,16 @@ const wrap    = document.getElementById('page-canvas-wrap');
 // ===== モーダル開閉 =====
 function openModal(idx, label, isMissed) {
   curPage = idx;
-  // 既存検出を比率でコピー（編集中は元を壊さない）
+  // 既存検出を比率でコピー（編集中は元を壊さない）。
+  // クラス(band/logo/map/other)はそのまま保つ。潰すと再学習のラベルが作れなくなる。
   boxes = (PAGE_DATA[idx] || []).map(b => ({
-    cls: b.cls === 'band' ? 'band' : 'wo',  // band以外はすべて白塗り扱い
+    cls: normCls(b.cls),
     x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1,
   }));
   selIdx = -1;
   document.getElementById('modal-title').textContent = label + ' — 確認・修正';
   document.getElementById('apply-result').style.display = 'none';
+  syncConfirmModalBtn();
   modalEl.classList.add('open');
   // 元画像ロード後に枠を描く
   imgEl.onload = () => { renderBoxes(); updatePanel(); };
@@ -419,7 +528,7 @@ function renderBoxes() {
     const isBand = b.cls === 'band';
     const x0 = isBand ? 0 : b.x0, x1 = isBand ? 1 : b.x1;
     const el = document.createElement('div');
-    el.className = 'ebox ' + (isBand ? 'band' : 'wo') + (i === selIdx ? ' sel' : '');
+    el.className = 'ebox ' + b.cls + (i === selIdx ? ' sel' : '');
     el.style.left   = (offX + x0 * r.width) + 'px';
     el.style.top    = (offY + b.y0 * r.height) + 'px';
     el.style.width  = ((x1 - x0) * r.width) + 'px';
@@ -427,7 +536,7 @@ function renderBoxes() {
 
     const tag = document.createElement('span');
     tag.className = 'ebox-tag';
-    tag.textContent = isBand ? '帯' : '白塗り';
+    tag.textContent = CLS_LABEL[b.cls];
     el.appendChild(tag);
 
     const del = document.createElement('button');
@@ -507,22 +616,35 @@ function endBoxDrag() {
   document.removeEventListener('touchend', endBoxDrag);
 }
 
-// ===== 枠の追加 =====
-function addBand() {
-  boxes.push({ cls: 'band', x0: 0, y0: 0.42, x1: 1, y1: 0.52 });
-  selIdx = boxes.length - 1; renderBoxes(); updatePanel();
-}
-function addWhiteout() {
-  boxes.push({ cls: 'wo', x0: 0.32, y0: 0.42, x1: 0.68, y1: 0.52 });
+// ===== 枠の追加・種類の変更 =====
+function addBox(cls) {
+  cls = normCls(cls);
+  // 帯は全幅で統一（サーバ側の label_rect と同じ規約。ラベルの一貫性のため）
+  if (cls === 'band') boxes.push({ cls, x0: 0, y0: 0.42, x1: 1, y1: 0.52 });
+  else                boxes.push({ cls, x0: 0.32, y0: 0.42, x1: 0.68, y1: 0.52 });
   selIdx = boxes.length - 1; renderBoxes(); updatePanel();
 }
 
+// 誤ったクラスで検出された枠を直せるようにする（ロゴ→案内図など）。
+// 正しいクラスに直すほど再学習の質が上がる。
+function changeCls(cls) {
+  if (selIdx < 0 || !boxes[selIdx]) return;
+  const b = boxes[selIdx];
+  b.cls = normCls(cls);
+  if (b.cls === 'band') { b.x0 = 0; b.x1 = 1; }
+  renderBoxes(); updatePanel();
+}
+
 function updatePanel() {
-  const nBand = boxes.filter(b => b.cls === 'band').length;
-  const nWo   = boxes.length - nBand;
+  const n = { band: 0, logo: 0, map: 0, other: 0 };
+  boxes.forEach(b => { n[b.cls] = (n[b.cls] || 0) + 1; });
   document.getElementById('box-info').innerHTML =
-    `帯: <b>${nBand}</b> 個　白塗り: <b>${nWo}</b> 個` +
+    `帯 <b>${n.band}</b>／ロゴ <b>${n.logo}</b>／案内図 <b>${n.map}</b>／その他 <b>${n.other}</b>` +
     (boxes.length === 0 ? '<br><span class="muted">枠なし＝元画像のまま出力</span>' : '');
+
+  const sel = document.getElementById('cls-select');
+  if (selIdx >= 0 && boxes[selIdx]) { sel.disabled = false; sel.value = boxes[selIdx].cls; }
+  else { sel.disabled = true; sel.value = ''; }
 }
 
 // ===== 適用（全枠を送って貼り直し） =====
@@ -538,7 +660,7 @@ async function applyEdits() {
 
   const payload = {
     rects: boxes.map(b => ({
-      cls: b.cls === 'band' ? 'band' : 'manual',
+      cls: b.cls,
       x0_ratio: b.x0, y0_ratio: b.y0, x1_ratio: b.x1, y1_ratio: b.y1,
     })),
   };
@@ -553,31 +675,24 @@ async function applyEdits() {
     if (!data.ok) throw new Error(data.error || 'エラー');
 
     // 編集内容を保持（次回開いたときの初期表示にも反映）
-    PAGE_DATA[curPage] = boxes.map(b => ({ cls: b.cls === 'band' ? 'band' : 'manual', x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 }));
+    PAGE_DATA[curPage] = boxes.map(b => ({ cls: b.cls, x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 }));
 
     // グリッドのサムネを更新（実際の処理結果を表示）
     const th = document.getElementById(`thumb-${curPage}`);
     if (th) th.src = `/thumb_all/${JOB_ID}/${curPage}?t=${data.ts}`;
 
     // カードの状態を更新
-    const card  = document.getElementById(`card-${curPage}`);
-    const badge = document.getElementById(`badge-${curPage}`);
-    const lbl   = document.getElementById(`label-${curPage}`);
-    if (card) {
-      card.classList.remove('missed', 'ok', 'manually-done');
-      if (data.missed) {
-        card.classList.add('missed');
-        if (badge) { badge.className = 'thumb-status status-miss'; badge.textContent = '未検出'; }
-      } else {
-        card.classList.add('manually-done');
-        if (badge) { badge.className = 'thumb-status status-manual'; badge.textContent = '手動'; }
-        if (lbl) lbl.style.color = '';
-      }
-    }
+    setCardState(curPage, data.missed, true);
     updateCounts();
 
+    // 直した内容はそのまま正解データ。確認済みとして扱う（サーバ側で記録済み）
+    markConfirmed(curPage);
+    syncConfirmModalBtn();
+
     res.className = 'apply-result ok';
-    res.textContent = '✓ 貼り直しました';
+    res.textContent = (TRAINING_ON && data.saved)
+      ? '✓ 貼り直して学習データに記録しました'
+      : '✓ 貼り直しました';
     res.style.display = 'block';
   } catch (e) {
     res.className = 'apply-result err';
@@ -593,13 +708,140 @@ function updateCounts() {
   const ok   = document.querySelectorAll('.thumb-card.ok, .thumb-card.manually-done').length;
   document.getElementById('hdr-miss').textContent = `未検出 ${miss}ページ`;
   document.getElementById('hdr-ok').textContent  = `検出済 ${ok}ページ`;
+  document.getElementById('hdr-learn').textContent = `学習に記録 ${confirmedSet.size}ページ`;
+}
+
+// ===== カードの見た目を更新 =====
+function setCardState(idx, missed, manual) {
+  const card  = document.getElementById(`card-${idx}`);
+  const badge = document.getElementById(`badge-${idx}`);
+  const lbl   = document.getElementById(`label-${idx}`);
+  if (!card) return;
+  card.classList.remove('missed', 'ok', 'manually-done');
+  if (missed) {
+    card.classList.add('missed');
+    if (badge) { badge.className = 'thumb-status status-miss'; badge.textContent = '未検出'; }
+  } else {
+    card.classList.add(manual ? 'manually-done' : 'ok');
+    if (badge) {
+      badge.className = 'thumb-status ' + (manual ? 'status-manual' : 'status-ok');
+      badge.textContent = manual ? '手動' : '検出済';
+    }
+    if (lbl) lbl.style.color = '';
+  }
+}
+
+// ===== ページの回転 =====
+// 横向きで登録された販売図面は帯が検出できないので、90度単位で直せるようにする。
+// 回すと既存の枠は意味を失う（帯は「常に全幅」の規約が縦帯になって壊れる）ので作り直し、
+// サーバ側でもう一度だけ検出した結果を「推奨位置」として置く。貼るかは人が決める。
+let rotating = false;
+async function rotatePage(delta) {
+  if (curPage === null || rotating) return;
+  rotating = true;
+  const res  = document.getElementById('apply-result');
+  const btns = [...document.querySelectorAll('.btn-rot')];
+  btns.forEach(b => b.disabled = true);
+  res.className = 'apply-result ok';
+  res.textContent = '回転中...';
+  res.style.display = 'block';
+  try {
+    const r = await fetch(`/rotate_page/${JOB_ID}/${curPage}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delta }),
+    });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error || 'エラー');
+
+    boxes = (data.suggestions || []).map(b => ({
+      cls: normCls(b.cls), x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1,
+    }));
+    PAGE_DATA[curPage] = boxes.map(b => ({ ...b }));
+    selIdx = -1;
+
+    // 背景とサムネを差し替える（?t= でブラウザのキャッシュを避ける）
+    imgEl.onload = () => { renderBoxes(); updatePanel(); };
+    imgEl.src = `/orig_img/${JOB_ID}/${curPage}?t=${data.ts}`;
+    const th = document.getElementById(`thumb-${curPage}`);
+    if (th) th.src = `/thumb_all/${JOB_ID}/${curPage}?t=${data.ts}`;
+
+    // サーバ側で枠を消したので、貼り直すまでは未検出扱い。確認済みも外れている
+    confirmedSet.delete(curPage);
+    const card = document.getElementById(`card-${curPage}`);
+    if (card) card.classList.remove('confirmed');
+    setCardState(curPage, true, false);
+    syncConfirmModalBtn();
+    updateCounts();
+
+    const n = boxes.length;
+    res.textContent = n
+      ? `✓ 回転しました（推奨位置を${n}件表示。確認して「適用して貼り直す」）`
+      : '✓ 回転しました（検出なし。「＋帯」で追加してください）';
+  } catch (e) {
+    res.className = 'apply-result err';
+    res.textContent = '✗ ' + e.message;
+  } finally {
+    rotating = false;
+    btns.forEach(b => b.disabled = false);
+  }
+}
+
+// ===== 「これで正しい」の記録（再学習の教材にする） =====
+function markConfirmed(idx) {
+  confirmedSet.add(idx);
+  const card = document.getElementById(`card-${idx}`);
+  if (card) card.classList.add('confirmed');
+  const btn = document.getElementById(`confirm-${idx}`);
+  if (btn) btn.title = '記録済み';
+  updateCounts();
+}
+
+// 一度記録したら取り消さない。誤って押したら枠を直して「適用して貼り直す」と、
+// 新しい内容が上書き扱いになる（学習側は同じページの最後の記録を採用する）。
+async function confirmPage(idx) {
+  if (confirmedSet.has(idx)) return true;
+  const btn = document.getElementById(`confirm-${idx}`);
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`/confirm_page/${JOB_ID}/${idx}`, { method: 'POST' });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error || 'エラー');
+    markConfirmed(idx);
+    return true;
+  } catch (e) {
+    alert('記録できませんでした: ' + e.message);
+    return false;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function onConfirmClick(e, idx) {
+  e.stopPropagation();
+  e.preventDefault();
+  confirmPage(idx);
+}
+
+function syncConfirmModalBtn() {
+  const btn = document.getElementById('btn-confirm-modal');
+  if (!btn || curPage === null) return;
+  const done = confirmedSet.has(curPage);
+  btn.disabled = done;
+  btn.textContent = done ? '✓ 記録済み' : '✓ 修正不要（このままでOK）';
+}
+
+async function confirmFromModal() {
+  if (curPage === null) return;
+  const ok = await confirmPage(curPage);
+  syncConfirmModalBtn();
+  if (ok) closeModal();
 }
 
 function setCardOrientation(imgEl, cardId) {
-  if (imgEl.naturalWidth > imgEl.naturalHeight) {
-    const card = document.getElementById(cardId);
-    if (card) card.classList.add('landscape');
-  }
+  const card = document.getElementById(cardId);
+  // 回転でサムネの縦横が変わるので、付けっぱなしにせず毎回切り替える
+  if (card) card.classList.toggle('landscape', imgEl.naturalWidth > imgEl.naturalHeight);
 }
 
 // ウィンドウサイズ変更時は枠を描き直す（画像の表示サイズが変わるため）

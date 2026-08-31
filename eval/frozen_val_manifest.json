@@ -1,0 +1,185 @@
+{
+  "source": "datasets/roboflow/v3",
+  "splits_used": [
+    "valid",
+    "test"
+  ],
+  "count": 29,
+  "note": "このリストが検証セットの定義。学習には絶対に使わないこと。",
+  "images": [
+    {
+      "image": "5-30-2-pdf_page_1_png.rf.49430ec299452a492555c5e526a99453.jpg",
+      "split_origin": "valid",
+      "sha256": "b9e49d80b6989bbd2b6eb7ea276f2f3b14d89d6e1954991e47feb2d0c796bd0c",
+      "boxes": 2
+    },
+    {
+      "image": "5-30-2-pdf_page_6_png.rf.eff70c7dbdd9195c0617c919a14e2219.jpg",
+      "split_origin": "valid",
+      "sha256": "19b79e19143021fce627d0614ed4e45590d06c6e19a5767d19a4bbb9f4185b4d",
+      "boxes": 3
+    },
+    {
+      "image": "5-30-pdf_page_17_png.rf.44c69d92ef3fae57ad2957fb36e16715.jpg",
+      "split_origin": "valid",
+      "sha256": "20bc0ed484b8319488d4a4a4838e51b6de3abf430a24aae18abb8746e13372eb",
+      "boxes": 4
+    },
+    {
+      "image": "5-30-pdf_page_1_png.rf.827777c7dac8ca19529ba78ba7e23dd3.jpg",
+      "split_origin": "valid",
+      "sha256": "b59ae5fadfae1f2b078c4956c3ecf70a87723492d099248e9e81fa04dd55c835",
+      "boxes": 0
+    },
+    {
+      "image": "5-30-pdf_page_21_png.rf.efe8a0e65edb900a4746c75b211a8599.jpg",
+      "split_origin": "valid",
+      "sha256": "12201940da863fea9548f27ea49d9c84e1570a2ffdb8a40db02fdcd782a2b62a",
+      "boxes": 3
+    },
+    {
+      "image": "5-30-pdf_page_24_png.rf.6220f27e47850c638afc3af371591e25.jpg",
+      "split_origin": "valid",
+      "sha256": "9c69e34b70594310b133d2754da8d663432a3157eedee40859e5aafc296e7587",
+      "boxes": 2
+    },
+    {
+      "image": "5-30-pdf_page_4_png.rf.006f84f9ca7f9cd1411568bc25fd9f83.jpg",
+      "split_origin": "valid",
+      "sha256": "b4f95a14d5f39cb537918bfaaceaeae21d0d8146ae8d392d90b2d89a2a6674ed",
+      "boxes": 3
+    },
+    {
+      "image": "5-30-pdf_page_7_png.rf.ab69ceee25b3ccb675c8f89fa676ad97.jpg",
+      "split_origin": "valid",
+      "sha256": "1b3d96711de901588893098482c4c25282dacfab909161a80d7d40699dd8b1ec",
+      "boxes": 1
+    },
+    {
+      "image": "zmn_list_20260529200238_1-pdf_page_13_png.rf.fc7038a01a7f5e0b9dd17ebeea8b19f2.jpg",
+      "split_origin": "valid",
+      "sha256": "caa7b39419aa90f45514e842d9961efc1641a0d2d4a8a4f9552a454c85e465a4",
+      "boxes": 2
+    },
+    {
+      "image": "zmn_list_20260529200238_1-pdf_page_16_png.rf.204dbe8e7c38f9d2dd38ced17b81073e.jpg",
+      "split_origin": "valid",
+      "sha256": "594f30dbd6dc8db22fde2e36b1f230c64f244ce85ffdb149e4c908c96c094901",
+      "boxes": 4
+    },
+    {
+      "image": "zmn_list_20260529200238_1-pdf_page_20_png.rf.1b7b44427e7df05800f42e2e6bfd84c0.jpg",
+      "split_origin": "valid",
+      "sha256": "b2c87c8a2118243238c4d75f1715a9d5c7f0f3bac38bd820a4d3e31897866cdc",
+      "boxes": 2
+    },
+    {
+      "image": "zmn_list_20260529200238_1-pdf_page_25_png.rf.4e7ffb954a0fcdded353696a3f41e7bc.jpg",
+      "split_origin": "valid",
+      "sha256": "31379a20b80c8e884f0540991d19a3603852a63e167ced90d157b5cd8bbf0c52",
+      "boxes": 2
+    },
+    {
+      "image": "zmn_list_20260529200238_1-pdf_page_3_png.rf.18422db4b1d2d586987cdc9808f6f2e3.jpg",
+      "split_origin": "valid",
+      "sha256": "da0812b12d6b642977e9e6c4e29d5ff0867d98fa468b37b2da8a49157b679b67",
+      "boxes": 1
+    },
+    {
+      "image": "zmn_list_20260529200238_2-pdf_page_1_png.rf.eb554c1f6edcaeff22b16e67cfde3a5f.jpg",
+      "split_origin": "valid",
+      "sha256": "a5d899d3299119cd752f2a6e4d1be7002a66883f6b5137472664b7055a47b353",
+      "boxes": 3
+    },
+    {
+      "image": "zmn_list_20260529200343_1-pdf_page_10_png.rf.626a1c47372cc6dade18e69105205d48.jpg",
+      "split_origin": "valid",
+      "sha256": "15ab6dabea874a1d1b4cf88a2502d59c3142e362c31712c309242167a40ef639",
+      "boxes": 1
+    },
+    {
+      "image": "zmn_list_20260529200343_1-pdf_page_19_png.rf.eb56c588b88796caa4b89a9f71725e03.jpg",
+      "split_origin": "valid",
+      "sha256": "04fde2451cb437074795916bc5e2f150fd3885456566c6ef076f4ce162818f76",
+      "boxes": 1
+    },
+    {
+      "image": "zmn_list_20260529200343_1-pdf_page_1_png.rf.a77e8114892b1f00df0a14ff08532f6b.jpg",
+      "split_origin": "valid",
+      "sha256": "2c0479eebb0f8a0dea6ec7ce779d3081421b1f7076c61b4ad1dbf0740807eb55",
+      "boxes": 2
+    },
+    {
+      "image": "zmn_list_20260529200343_1-pdf_page_6_png.rf.e2f6066a332b53adce77391a4f330400.jpg",
+      "split_origin": "valid",
+      "sha256": "9da6dd04db2bcd602768a549a8ae812315a237363998b6fcfe237cc069a0f6f5",
+      "boxes": 2
+    },
+    {
+      "image": "zmn_list_20260529200343_1-pdf_page_9_png.rf.7286d6de85422faa8e701be97f05c243.jpg",
+      "split_origin": "valid",
+      "sha256": "9d1e63d82966265ef39be4f726b359303945acb9ece5c64e116e208ac1fc6d66",
+      "boxes": 2
+    },
+    {
+      "image": "5-30-pdf_page_19_png.rf.f108f1cbb5d6699a8afe836b684fe660.jpg",
+      "split_origin": "test",
+      "sha256": "130802ebaffdf852f7782e93e3f0e2293eab47d1a67d8b19accab169128df62a",
+      "boxes": 2
+    },
+    {
+      "image": "5-30-pdf_page_22_png.rf.cd1b13e26ccbe0172adb193da85d924f.jpg",
+      "split_origin": "test",
+      "sha256": "a438e0a32956385fe2f68143f8d9fb6fa473d68a6c59cb6ad59980ea8648d209",
+      "boxes": 1
+    },
+    {
+      "image": "5-30-pdf_page_8_png.rf.9746a93520c5bc72f3d882d789bbcfd2.jpg",
+      "split_origin": "test",
+      "sha256": "2d36b34abfcebc815e05b4d557b15d0d8bc080c38c3174e39b1c87cfc3c73399",
+      "boxes": 4
+    },
+    {
+      "image": "zmn_list_20260529200238_1-pdf_page_7_png.rf.e9a5fb73ecbd5a85c5dc10b73486cb39.jpg",
+      "split_origin": "test",
+      "sha256": "9e2f6d4889e27d27b9af32f21b2ec31e1ff0d5a22ce95d3909a11562f4dc2a87",
+      "boxes": 2
+    },
+    {
+      "image": "zmn_list_20260529200343_1-pdf_page_18_png.rf.2b196a68b421e8c87de3d4f19a2e214b.jpg",
+      "split_origin": "test",
+      "sha256": "e28cc24e9b03ae7cc951fd4ef9c3ff8908983cfdc76b8fe7543da1f9e7bb1acf",
+      "boxes": 2
+    },
+    {
+      "image": "zmn_list_20260529200343_1-pdf_page_20_png.rf.ac8c99bd4b6c2b7d934e0abb58d91744.jpg",
+      "split_origin": "test",
+      "sha256": "3f01670ae16f735c8a9ae4cfbd65f63b48e1265d497d8970f047bf4d081c882e",
+      "boxes": 1
+    },
+    {
+      "image": "zmn_list_20260529200343_1-pdf_page_24_png.rf.67cca906f03efa5c7bbfb0b83be63b5f.jpg",
+      "split_origin": "test",
+      "sha256": "aa19a9f64196fa5377588a692231a98fd7b3162507088327b0c43b4cb45d5d87",
+      "boxes": 2
+    },
+    {
+      "image": "zmn_list_20260529200343_1-pdf_page_2_png.rf.c46b851c60df390fef3e192edc414570.jpg",
+      "split_origin": "test",
+      "sha256": "ff99b612cbf356a6a27b9ed240b42ed6cfb50dd1b9d8b0c41215fbcbe5fea9d1",
+      "boxes": 1
+    },
+    {
+      "image": "zmn_list_20260529200343_2-pdf_page_10_png.rf.49b882b8bcca9dbd500c66c9d4d5acae.jpg",
+      "split_origin": "test",
+      "sha256": "cc6477744211b684fe80906df6a70c865d5134004603902b9f498cd22b29372d",
+      "boxes": 2
+    },
+    {
+      "image": "zmn_list_20260529200343_2-pdf_page_7_png.rf.ddb308bc874d70710ec363cc0aec04b3.jpg",
+      "split_origin": "test",
+      "sha256": "e54a4c8e0a5af4f611ec06f78242f0b48eae2e6aa59aeb67913dbe5b1c8cb9e9",
+      "boxes": 1
+    }
+  ]
+}
