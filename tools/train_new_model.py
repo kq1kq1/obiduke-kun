@@ -4,11 +4,19 @@ Colab（無料GPU）で回す想定。HF_TOKEN さえあれば学習データは
 
 流れ:
   1. Hubから土台データ(base/)と蓄積データ(data/)を落とす
-  2. 学習用フォルダを組む   学習 = 土台の学習分 + 蓄積データ / 検証 = 凍結セットだけ
-  3. 検証画像が学習に混ざっていないか確認する（混ざると基準スコアが甘く出て比較にならない）
+  2. 学習用フォルダを3つに組む
+       train  … 重みを学習する分（土台 ＋ 蓄積データ）
+       val    … ultralyticsがエポックごとに見る分。best.pt の選び方に使う
+       frozen … 凍結検証セット。学習中は一切見せず、最終判定だけに使う
+  3. 凍結検証の画像が学習側に混ざっていないか確認する（混ざるとスコアが甘く出る）
   4. 今の best.pt から続きを学習する（ゼロからより速く、覚えたことも残る）
   5. 凍結検証セットで採点し、基準スコアと比べる
   6. 良くなっていれば採用、悪くなっていれば採用しない（ここが一番大事）
+
+なぜ内部検証(val)と凍結検証(frozen)を分けるか:
+  ultralyticsは「検証成績がいちばん良かったエポック」を best.pt として選ぶ。
+  そこに凍結検証セットを使うと「選ぶのに使ったもので採点する」ことになり、
+  成績が実際より良く出てしまう。判定を信じられるようにするため分けている。
 
 「毎回、蓄積した全データで学習し直す」のが前提。増分だけで学習すると、
 以前できていたことが劣化する（忘却）。
@@ -49,74 +57,93 @@ def download(repo_id, token, workdir):
     return local
 
 
-def build_dataset(hub_dir, out_dir):
-    """学習用のフォルダを組む。返り値: (学習枚数, 検証枚数, 蓄積から入った枚数)"""
-    for split in ("train", "val"):
+def build_dataset(hub_dir, out_dir, val_every=10):
+    """学習用のフォルダを組む。3つに分ける。
+
+      train/  … 重みを学習する分（土台 ＋ 蓄積データ）
+      val/    … ultralyticsがエポックごとに見る分。**best.pt の選び方に使う**
+      frozen/ … 凍結検証セット。学習中は一切見せず、**最終判定だけに使う**
+
+    ultralyticsは「検証成績がいちばん良かったエポック」を best.pt として選ぶ。
+    そこに凍結検証セットを使うと「選ぶのに使ったもので採点する」ことになり、
+    成績が実際より良く出てしまう。だから内部検証は学習データから取り分ける。
+
+    返り値: (学習枚数, 内部検証枚数, 凍結検証枚数, 蓄積から入った枚数)
+    """
+    for split in ("train", "val", "frozen"):
         for sub in ("images", "labels"):
             d = out_dir / split / sub
             if d.exists():
                 shutil.rmtree(d)
             d.mkdir(parents=True)
 
-    # --- 土台の学習分 ---
-    n_base = 0
+    # --- 学習に回す候補を集める（土台 ＋ 蓄積）---
+    pool = []          # [(画像パス, ラベルの中身, 出力名)]
+    n_col = 0
+
     base_train = hub_dir / "base" / "train"
     if (base_train / "images").is_dir():
         for img in sorted((base_train / "images").iterdir()):
             lbl = base_train / "labels" / (img.stem + ".txt")
-            if not lbl.exists():
-                continue
-            shutil.copyfile(img, out_dir / "train" / "images" / img.name)
-            shutil.copyfile(lbl, out_dir / "train" / "labels" / lbl.name)
-            n_base += 1
+            if lbl.exists():
+                pool.append((img, lbl.read_text(encoding="utf-8"), img.name))
     else:
         print("[warn] base/train がありません。先に tools/upload_base_dataset.py を実行してください")
 
-    # --- 凍結検証セット ---
-    n_val = 0
+    data_dir = hub_dir / "data"
+    if (data_dir / "records").is_dir():
+        latest, ok_lines, bad = load_records(data_dir)
+        print(f"  蓄積データ: {ok_lines}行 → {len(latest)}ページ"
+              + (f"（壊れた行 {bad} を除外）" if bad else ""))
+        for rel, rec in sorted(latest.items()):
+            src = data_dir / rel
+            if not src.is_file():
+                continue
+            label = rec.get("label", "") or ""
+            pool.append((src, (label + "\n") if label else "", Path(rel).stem + ".jpg"))
+            n_col += 1
+
+    # --- 内部検証を等間隔に取り分ける（毎回同じ分け方になるよう決め打ち）---
+    n_train = n_val = 0
+    for i, (img, label_text, name) in enumerate(pool):
+        split = "val" if (val_every and i % val_every == 0) else "train"
+        shutil.copyfile(img, out_dir / split / "images" / name)
+        (out_dir / split / "labels" / (Path(name).stem + ".txt")).write_text(
+            label_text, encoding="utf-8")
+        if split == "val":
+            n_val += 1
+        else:
+            n_train += 1
+
+    # --- 凍結検証セット（学習には一切使わない）---
+    n_frozen = 0
     base_val = hub_dir / "base" / "frozen_val"
     if (base_val / "images").is_dir():
         for img in sorted((base_val / "images").iterdir()):
             lbl = base_val / "labels" / (img.stem + ".txt")
             if not lbl.exists():
                 continue
-            shutil.copyfile(img, out_dir / "val" / "images" / img.name)
-            shutil.copyfile(lbl, out_dir / "val" / "labels" / lbl.name)
-            n_val += 1
+            shutil.copyfile(img, out_dir / "frozen" / "images" / img.name)
+            shutil.copyfile(lbl, out_dir / "frozen" / "labels" / lbl.name)
+            n_frozen += 1
 
-    # --- 蓄積データ（人が確認・修正したページ）---
-    n_col = 0
-    data_dir = hub_dir / "data"
-    if (data_dir / "records").is_dir():
-        latest, ok_lines, bad = load_records(data_dir)
-        print(f"  蓄積データ: {ok_lines}行 → {len(latest)}ページ" +
-              (f"（壊れた行 {bad} を除外）" if bad else ""))
-        for rel, rec in sorted(latest.items()):
-            src = data_dir / rel
-            if not src.is_file():
-                continue
-            stem = Path(rel).stem
-            shutil.copyfile(src, out_dir / "train" / "images" / f"{stem}.jpg")
-            label = rec.get("label", "") or ""
-            (out_dir / "train" / "labels" / f"{stem}.txt").write_text(
-                (label + "\n") if label else "", encoding="utf-8")
-            n_col += 1
-
-    # --- 検証画像が学習に混ざっていないか ---
-    train_names = {p.stem for p in (out_dir / "train" / "images").iterdir()}
-    val_names = {p.stem for p in (out_dir / "val" / "images").iterdir()}
-    leak = train_names & val_names
+    # --- 凍結検証の画像が学習側に混ざっていないか ---
+    seen = {p.stem for p in (out_dir / "train" / "images").iterdir()}
+    seen |= {p.stem for p in (out_dir / "val" / "images").iterdir()}
+    frozen_names = {p.stem for p in (out_dir / "frozen" / "images").iterdir()}
+    leak = seen & frozen_names
     if leak:
-        print(f"エラー: 検証用の画像が学習にも入っています（{len(leak)}件）: "
+        print(f"エラー: 凍結検証の画像が学習にも入っています（{len(leak)}件）: "
               f"{sorted(leak)[:3]}", file=sys.stderr)
         print("       このまま学習するとスコアが甘く出て、比較になりません。", file=sys.stderr)
         raise SystemExit(1)
 
     (out_dir / "data.yaml").write_text(
+        f"# frozen/ は書かない。ultralyticsに見せると best.pt の選び方に混ざるため。\n"
         f"path: {out_dir.resolve().as_posix()}\n"
         f"train: train/images\nval: val/images\n\n"
         f"nc: {len(NAMES)}\nnames: {NAMES}\n", encoding="utf-8")
-    return n_base + n_col, n_val, n_col
+    return n_train, n_val, n_frozen, n_col
 
 
 def judge(base, new):
@@ -186,10 +213,15 @@ def main():
 
     if not args.skip_train:
         hub = download(args.repo_id, token, work)
-        n_train, n_val, n_col = build_dataset(hub, ds)
-        print(f"\n学習 {n_train}枚（うち蓄積データ {n_col}枚） / 検証 {n_val}枚（凍結セット）")
-        if n_val == 0:
-            print("エラー: 検証セットが空です。判定できないので中止します。", file=sys.stderr)
+        n_train, n_val, n_frozen, n_col = build_dataset(hub, ds)
+        print(f"\n学習     {n_train}枚（うち蓄積データ {n_col}枚）")
+        print(f"内部検証 {n_val}枚（best.pt の選び方に使う）")
+        print(f"凍結検証 {n_frozen}枚（学習には見せない・最終判定だけに使う）")
+        if n_frozen == 0:
+            print("エラー: 凍結検証セットが空です。判定できないので中止します。", file=sys.stderr)
+            return 1
+        if n_train == 0:
+            print("エラー: 学習データが空です。中止します。", file=sys.stderr)
             return 1
 
         from ultralytics import YOLO
@@ -205,11 +237,12 @@ def main():
 
     # ---- 凍結検証セットで採点（アプリと同条件） ----
     print("\n" + "=" * 64)
-    print("凍結検証セットで採点（アプリと同条件 conf=%.2f imgsz=%d）" % (APP_CONF, IMGSZ))
+    print("凍結検証セットで採点（学習に一切使っていない分・アプリと同条件 conf=%.2f imgsz=%d）"
+          % (APP_CONF, IMGSZ))
     print("=" * 64)
     from ultralytics import YOLO
-    imgs = sorted((ds / "val" / "images").iterdir())
-    stats, missing = evaluate(YOLO(str(weights)), imgs, ds / "val" / "labels", APP_CONF)
+    imgs = sorted((ds / "frozen" / "images").iterdir())
+    stats, missing = evaluate(YOLO(str(weights)), imgs, ds / "frozen" / "labels", APP_CONF)
     new = summarize(stats, len(imgs), missing)
 
     print(f"\n{'クラス':<8}{'再現率':>10}{'適合率':>10}{'F1':>10}")
