@@ -204,15 +204,21 @@ def apply_whiteout(page_img, rect):
     return page
 
 
-# 枠のクラス。band=白塗りして自社帯に差し替え、logo/map/other=白塗りのみ。
-# logo/map は再学習のラベルになる。other は「帯でもロゴでも案内図でもないが隠したい場所」
-# （QRコード等）で、学習ラベルには使わない（クラス定義が壊れるため）。
-BOX_CLASSES = ("band", "logo", "map", "other")
+# 枠のクラス。band=白塗りして自社帯に差し替え、それ以外=白塗りのみ。
+#   band … 他社の会社情報帯
+#   map  … 案内図
+#   logo … モデルが「他社ロゴ」として検出したもの
+#   wo   … 人が「白塗り」ボタンで足したもの（ロゴ・QR・電話番号など隠したい局所領域）
+#
+# 画面では logo と wo をどちらも「白塗り」として見せる（使う人にとって違いが無いため）。
+# データ上は別のまま残すので、あとから「人が足した分だけ除く」といった選び方もできる。
+# 学習ラベルでは wo を logo として扱う（training_data.CLASS_IDS を参照）。
+BOX_CLASSES = ("band", "logo", "map", "wo")
 
 
 def norm_cls(cls):
-    """クラス名を既定の4種に寄せる。旧データの 'manual' / 'wo' は other 扱い。"""
-    return cls if cls in BOX_CLASSES else "other"
+    """クラス名を既定の4種に寄せる。旧データの 'manual' / 'other' は wo 扱い。"""
+    return cls if cls in BOX_CLASSES else "wo"
 
 
 def label_rect(o, W, H):

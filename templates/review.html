@@ -197,18 +197,18 @@
      色はクラスごとに分ける。再学習のラベルになるので、何を指した枠かが見て分かる必要がある。 */
   .ebox { position: absolute; box-sizing: border-box; cursor: move; }
   .ebox.band  { border-top: 3px solid #e8a020; border-bottom: 3px solid #e8a020; background: rgba(232,160,32,0.22); }
-  .ebox.logo  { border: 2.5px solid #c84b2f; background: rgba(200,75,47,0.20); }
+  .ebox.logo,
+  .ebox.wo    { border: 2.5px solid #c84b2f; background: rgba(200,75,47,0.20); }
   .ebox.map   { border: 2.5px solid #2a6f8f; background: rgba(42,111,143,0.20); }
-  .ebox.other { border: 2.5px dashed #6b6560; background: rgba(107,101,96,0.18); }
   .ebox.sel   { box-shadow: 0 0 0 2px #2255cc; z-index: 5; }
   .ebox-tag {
     position: absolute; top: 0; left: 0; font-size: 0.62rem; font-weight: 700;
     color: #fff; padding: 1px 5px; line-height: 1.4; white-space: nowrap;
   }
   .ebox.band  .ebox-tag { background: #e8a020; }
-  .ebox.logo  .ebox-tag { background: #c84b2f; }
+  .ebox.logo  .ebox-tag,
+  .ebox.wo    .ebox-tag { background: #c84b2f; }
   .ebox.map   .ebox-tag { background: #2a6f8f; }
-  .ebox.other .ebox-tag { background: #6b6560; }
   .ebox-del {
     position: absolute; top: -11px; right: -11px; width: 22px; height: 22px;
     border-radius: 50%; border: 2px solid #fff; background: #1a1714; color: #fff;
@@ -231,16 +231,16 @@
 
   .modal-panel {
     width: 252px; flex-shrink: 0; border-left: 1px solid var(--border);
-    padding: 18px 14px; display: flex; flex-direction: column; gap: 14px;
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 9px;
     overflow-y: auto; background: var(--surface);
   }
   .panel-label {
-    font-size: 0.73rem; font-weight: 700; letter-spacing: 0.1em;
-    text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px;
+    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-muted); margin-bottom: 3px;
   }
   .instruction-box {
     background: #fff8e5; border: 1px solid #eed86a; border-radius: 6px;
-    padding: 10px 12px; font-size: 0.76rem; line-height: 1.7; color: #7a6820;
+    padding: 8px 10px; font-size: 0.74rem; line-height: 1.55; color: #7a6820;
   }
   .add-row { display: flex; gap: 8px; }
   .add-row + .add-row { margin-top: 8px; }
@@ -251,21 +251,20 @@
   }
   .btn-add:hover { background: var(--bg); }
   .btn-add.c-band  { border-left-color: #e8a020; }
-  .btn-add.c-logo  { border-left-color: #c84b2f; }
+  .btn-add.c-wo    { border-left-color: #c84b2f; }
   .btn-add.c-map   { border-left-color: #2a6f8f; }
-  .btn-add.c-other { border-left-color: #6b6560; }
   .btn-rot { border-left-width: 1.5px; font-size: 0.82rem; }
   .btn-rot:disabled { opacity: 0.5; cursor: default; }
   .rot-note {
-    margin-top: 7px; font-size: 0.71rem; line-height: 1.6; color: var(--text-muted);
+    margin-top: 5px; font-size: 0.69rem; line-height: 1.45; color: var(--text-muted);
   }
   .box-info {
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    padding: 10px 12px; font-size: 0.8rem; line-height: 1.7;
+    padding: 7px 10px; font-size: 0.78rem; line-height: 1.55;
   }
   .box-info .muted { color: var(--text-muted); font-size: 0.74rem; }
   .cls-select {
-    width: 100%; margin-top: 8px; padding: 7px 8px; font-size: 0.8rem;
+    width: 100%; margin-top: 6px; padding: 6px 8px; font-size: 0.78rem;
     border: 1.5px solid var(--border); border-radius: 6px; background: #fff;
     color: var(--text); font-family: inherit;
   }
@@ -273,7 +272,7 @@
 
   .btn-confirm-modal {
     background: #fff; color: var(--ok); border: 1.5px solid var(--ok);
-    padding: 10px 14px; border-radius: 7px; font-size: 0.85rem; font-weight: 700;
+    padding: 9px 14px; border-radius: 7px; font-size: 0.83rem; font-weight: 700;
     cursor: pointer; width: 100%; transition: all 0.15s;
   }
   .btn-confirm-modal:hover:not(:disabled) { background: var(--ok-light); }
@@ -287,7 +286,7 @@
 
   .btn-apply {
     background: var(--ok); color: #fff; border: none;
-    padding: 12px 14px; border-radius: 7px; font-size: 0.88rem; font-weight: 700;
+    padding: 10px 14px; border-radius: 7px; font-size: 0.86rem; font-weight: 700;
     cursor: pointer; width: 100%; transition: background 0.15s;
     display: flex; align-items: center; justify-content: center; gap: 6px;
   }
@@ -402,10 +401,10 @@
         <div>
           <div class="panel-label">操作方法</div>
           <div class="instruction-box">
-            枠を<b>ドラッグで移動</b>、青いハンドルで<b>サイズ変更</b>、<b>×で削除</b>。<br>
-            <b style="color:#c88010">橙＝帯（自社帯に差し替え）</b><br>
-            <b style="color:#c84b2f">赤＝ロゴ</b> / <b style="color:#2a6f8f">青＝案内図</b> / <b style="color:#6b6560">灰＝その他</b>（白塗りのみ）<br>
-            背景は帯を貼る前の元画像です。
+            <b>ドラッグ</b>で移動、青ハンドルで<b>サイズ変更</b>、<b>×</b>で削除。<br>
+            <b style="color:#c88010">橙＝帯</b>（自社帯に差し替え）/
+            <b style="color:#c84b2f">赤＝白塗り</b> /
+            <b style="color:#2a6f8f">青＝案内図</b>
           </div>
         </div>
         <div>
@@ -415,19 +414,17 @@
             <button class="btn-add btn-rot" type="button" onclick="rotatePage(90)">↻ 右90°</button>
           </div>
           <div class="rot-note">
-            横向きで登録された図面を直せます。<b>回すと枠は引き直し</b>になり、
-            もう一度だけ検出して推奨位置を出します。✓を押すのは回転を済ませてから。
+            <b>回すと枠は引き直し</b>になり、再検出して推奨位置を出します。✓は回転後に。
           </div>
         </div>
         <div>
           <div class="panel-label">枠を追加</div>
           <div class="add-row">
             <button class="btn-add c-band" type="button" onclick="addBox('band')">＋ 帯</button>
-            <button class="btn-add c-logo" type="button" onclick="addBox('logo')">＋ ロゴ</button>
           </div>
           <div class="add-row">
             <button class="btn-add c-map" type="button" onclick="addBox('map')">＋ 案内図</button>
-            <button class="btn-add c-other" type="button" onclick="addBox('other')">＋ その他</button>
+            <button class="btn-add c-wo" type="button" onclick="addBox('wo')">＋ 白塗り</button>
           </div>
         </div>
         <div>
@@ -436,9 +433,8 @@
           <select class="cls-select" id="cls-select" onchange="changeCls(this.value)" disabled>
             <option value="">選択中の枠の種類…</option>
             <option value="band">帯（自社帯に差し替え）</option>
-            <option value="logo">ロゴ</option>
             <option value="map">案内図</option>
-            <option value="other">その他（学習には使わない）</option>
+            <option value="wo">白塗り</option>
           </select>
         </div>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:auto">
@@ -466,9 +462,12 @@ const confirmedSet = new Set({{ confirmed|tojson }});
 
 // 枠の種類。サーバ側の BOX_CLASSES と必ず揃える。
 // band=自社帯に差し替え、logo/map=白塗り＋学習ラベル、other=白塗りのみ（学習には使わない）
-const CLS_LIST  = ['band', 'logo', 'map', 'other'];
-const CLS_LABEL = { band: '帯', logo: 'ロゴ', map: '案内図', other: '白塗り' };
-function normCls(c) { return CLS_LIST.includes(c) ? c : 'other'; }
+// logo（モデルが検出したロゴ）と wo（人が白塗りボタンで足した枠）は
+// 画面上どちらも「白塗り」として見せる。使う人にとって違いが無いため。
+// データ上は別のまま残すので、あとから学習で分けることもできる。
+const CLS_LIST  = ['band', 'logo', 'map', 'wo'];
+const CLS_LABEL = { band: '帯', logo: '白塗り', map: '案内図', wo: '白塗り' };
+function normCls(c) { return CLS_LIST.includes(c) ? c : 'wo'; }
 
 let curPage = null;
 let boxes = [];        // [{cls,x0,y0,x1,y1}] 比率(0..1)
@@ -636,15 +635,18 @@ function changeCls(cls) {
 }
 
 function updatePanel() {
-  const n = { band: 0, logo: 0, map: 0, other: 0 };
-  boxes.forEach(b => { n[b.cls] = (n[b.cls] || 0) + 1; });
+  const n = { band: 0, map: 0, wo: 0 };
+  boxes.forEach(b => { n[b.cls === 'logo' ? 'wo' : b.cls] += 1; });
   document.getElementById('box-info').innerHTML =
-    `帯 <b>${n.band}</b>／ロゴ <b>${n.logo}</b>／案内図 <b>${n.map}</b>／その他 <b>${n.other}</b>` +
+    `帯 <b>${n.band}</b>／案内図 <b>${n.map}</b>／白塗り <b>${n.wo}</b>` +
     (boxes.length === 0 ? '<br><span class="muted">枠なし＝元画像のまま出力</span>' : '');
 
   const sel = document.getElementById('cls-select');
-  if (selIdx >= 0 && boxes[selIdx]) { sel.disabled = false; sel.value = boxes[selIdx].cls; }
-  else { sel.disabled = true; sel.value = ''; }
+  if (selIdx >= 0 && boxes[selIdx]) {
+    sel.disabled = false;
+    // logoは選択肢に出さないので、表示上は「白塗り」に寄せる（値はlogoのまま保つ）
+    sel.value = boxes[selIdx].cls === 'logo' ? 'wo' : boxes[selIdx].cls;
+  } else { sel.disabled = true; sel.value = ''; }
 }
 
 // ===== 適用（全枠を送って貼り直し） =====

@@ -42,9 +42,13 @@ IMAGES_SUBDIR = "images"
 RECORDS_SUBDIR = "records"
 
 # 学習ラベルに使うクラス。detect.py の names（0:band 1:logo 2:map）と必ず同じ順にする。
-CLASS_IDS = {"band": 0, "logo": 1, "map": 2}
-# 'other' は「帯でもロゴでも案内図でもないが白塗りしたい場所」（QRコード等）。
-# 学習ラベルに混ぜるとクラス定義が壊れるので、記録は残すがYOLOラベルには出さない。
+#
+# "wo"（人が「白塗り」ボタンで足した枠）は logo と同じ 1 に寄せる。
+# アプリでの logo の実用上の意味は「白塗りすべき局所領域」で、人が白塗りしたものも
+# まさにそれなので、同じクラスとして学習させる。
+# ただし記録の boxes には cls="wo" がそのまま残るので、あとから
+# 「人が足した分は学習に使わない」と方針を変えることもできる（判断を先送りできる形）。
+CLASS_IDS = {"band": 0, "logo": 1, "map": 2, "wo": 1}
 
 _repo_id = os.environ.get("TRAINING_DATA_REPO", "").strip()
 _token = (os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or "").strip()
