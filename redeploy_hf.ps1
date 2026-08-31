@@ -1,4 +1,4 @@
-# 帯付けくん 再デプロイスクリプト（Hugging Face Spaces）
+﻿# 帯付けくん 再デプロイスクリプト（Hugging Face Spaces）
 #
 # やること:
 #   1. 今の main を GitHub(origin) に push
