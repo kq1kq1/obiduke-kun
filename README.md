@@ -242,6 +242,86 @@ mAPだと実務では関係ない x方向のズレで良し悪しを判断して
 蓄積データが貯まったら、その一部を検証用に取り分けて凍結セットを広げること。
 **取り分けた分は学習に使わない。**
 
+### ⚠️ 学習画像が潰れている問題（次の再学習の前に直すこと）
+
+Roboflowの v3 は **Stretch to 640×640** で書き出されていて、縦長のマイソクが正方形に
+押し潰された状態で学習されている。一方、推論時のultralyticsは縦横比を保ったまま
+余白を足す（letterbox）。**潰れた絵で学習して、潰れていない絵を見せている。**
+
+アプリが貯める蓄積データは元の縦横比のままなので、このまま混ぜると
+「潰れた画像」と「潰れていない画像」が同じ学習データに同居してさらに濁る。
+
+**直し方**（次の再学習の前に一度だけ）:
+
+1. Roboflowで **Create New Version**
+2. Preprocessing の **Resize を削除**（または「Fit within」にする）。ultralyticsが
+   学習時にも推論時と同じletterboxをかけるので、Roboflow側でリサイズしないのが一番揃う
+3. YOLOv8形式でExport → `datasets/roboflow/v4/` に展開
+4. **凍結検証セットを作り直す**:
+   ```powershell
+   python tools/freeze_val_set.py datasets/roboflow/v4 --force
+   python tools/eval_model.py best.pt --save eval/baseline_best_pt.json
+   ```
+   `--force` は物差しを変える操作なので普段は使わない。**蓄積データが貯まる前の今だけ**
+   やっておく。後からやると過去のスコアと比較できなくなる。
+
+## 再学習パイプライン
+
+### 一度だけ: 土台データをHubに置く
+
+```powershell
+$env:HF_TOKEN = "hf_xxx"
+python tools/upload_base_dataset.py kq1kq1/obiduke-training-data --dry-run   # 中身の確認
+python tools/upload_base_dataset.py kq1kq1/obiduke-training-data
+```
+
+Roboflowの学習分（bandを全幅に統一）と凍結検証セットを `base/` に置く。
+以後の再学習は **HF_TOKEN だけで学習データが全部そろう**。
+凍結検証セットが自分のPCにしか無い状態も解消される（消えると比較の物差しを失うため）。
+
+### 毎回: 再学習して判定する
+
+Colab（無料GPU）で:
+
+```python
+!git clone https://github.com/kq1kq1/obiduke-kun && cd obiduke-kun
+!pip install -q ultralytics huggingface_hub
+import os; os.environ['HF_TOKEN'] = 'hf_xxx'
+!python tools/train_new_model.py kq1kq1/obiduke-training-data --epochs 100
+```
+
+やること:
+
+1. Hubから土台データと蓄積データを落とす
+2. 学習 = 土台の学習分 ＋ 蓄積データ / 検証 = 凍結セットだけ、で組む
+3. **検証画像が学習に混ざっていないか確認**（混ざったら止まる）
+4. 今の `best.pt` から続きを学習（ゼロからより速く、覚えたことも残る）
+5. 凍結検証セットで採点して基準スコアと比較
+
+判定は3つ。
+
+| 判定 | 条件 |
+|---|---|
+| **採用しない** | 帯の再現率が下がった、または帯を出せないページが増えた |
+| **採用してよい** | 悪化がなく、どれかが改善した |
+| **判断が必要** | 悪化はないが改善もない → **見送るのが安全** |
+
+帯の見逃しは赤い「未検出」になって手作業が増えるので、**誤検出がどれだけ減っても
+見逃しが増えたら採用しない**。
+
+### 採用するとき
+
+```powershell
+# 1. training_run/train/weights/best.pt を best.pt に上書き
+python -c "from ultralytics import YOLO; YOLO('best.pt').export(format='openvino', imgsz=640)"
+python tools/eval_model.py best.pt                              # 上書き後に再確認
+python tools/eval_model.py best.pt --save eval/baseline_best_pt.json  # 基準を更新
+python tools/selfcheck_rotation.py                              # デプロイ前チェック
+git add -A; git commit -m "モデル更新"; .edeploy_hf.ps1
+```
+
+**基準スコアの更新を忘れないこと。** 次の再学習はこれと比べる。
+
 ### モデルの再学習（精度を上げたいとき）
 
 苦手なフォーマット（検出漏れ・新しい帯/ロゴ/案内図）が出たら、画像を足して再学習すれば改善する。
@@ -354,6 +434,8 @@ git branch -D hf-deploy
 | `tools/freeze_val_set.py` | 検証セットを凍結する（新旧モデルを同じ物差しで比べるため） |
 | `tools/eval_model.py` | 凍結検証セットでモデルを採点する |
 | `tools/selfcheck_rotation.py` | 回転まわりの自己チェック（デプロイ前に流す） |
+| `tools/upload_base_dataset.py` | 土台データをHFに置く（一度だけ） |
+| `tools/train_new_model.py` | 再学習して、良くなったかを判定する |
 | `eval/` | 検証セットの定義と基準スコア（Git管理） |
 | `own_bands/` | 自社帯画像（恒久的に残す帯はここに置いてコミット） |
 | `own_bands_default.txt` | デフォルトの自社帯ファイル名 |
