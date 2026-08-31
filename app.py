@@ -255,6 +255,60 @@ def paint_box(img, cls, rect, own_band_path):
 
 
 # ============================================
+# ページの回転
+#
+# 販売図面には縦長のものが横向きで登録されていることがあり、そのままだと帯を検出できない。
+# レビュー画面で90度単位に回せるようにする。
+#
+# 元画像(_orig)は絶対に書き換えず、累積角度を meta に持って毎回そこから作り直す。
+# 回すたびに上書きするとJPEGの再エンコードが重なって画質が落ちていくため
+# （実測: 4回転して1周させると画素差が平均3.05・最大171）。
+# ============================================
+
+VALID_ROTATIONS = (0, 90, 180, 270)
+
+
+def _apply_rotation(img, rotation):
+    """rotationを時計回りの角度として適用する（PILのROTATE_nは反時計回りなので逆にする）。"""
+    if rotation == 90:
+        return img.transpose(Image.ROTATE_270)
+    if rotation == 180:
+        return img.transpose(Image.ROTATE_180)
+    if rotation == 270:
+        return img.transpose(Image.ROTATE_90)
+    return img
+
+
+def _orig_page_path(job_id, page_index):
+    """PDFから起こしたままの元画像。回転しても絶対に書き換えない。"""
+    return os.path.join(DIR_OUTPUT, job_id + "_orig", f"page_{page_index}.jpg")
+
+
+def _work_page_path(job_id, page_index):
+    """帯付け前の作業用画像（回転を反映したもの）。
+
+    回転していないページでは作られないので、その場合は元画像をそのまま使う。
+    エディタの背景・貼り直しの元・学習データは **すべてこれを見る**。
+    ここを元画像に向けたままにすると、回転したページで
+    「画像は回転前・座標は回転後」という食い違いが起きて学習データが静かに汚れる。
+    """
+    work = os.path.join(DIR_OUTPUT, job_id + "_work", f"page_{page_index}.jpg")
+    if os.path.exists(work):
+        return work
+    return _orig_page_path(job_id, page_index)
+
+
+def _rebuild_work_page(job_id, page_index, rotation):
+    """元画像から回転を適用した作業用画像を作り直して返す。"""
+    orig = _orig_page_path(job_id, page_index)
+    work = os.path.join(DIR_OUTPUT, job_id + "_work", f"page_{page_index}.jpg")
+    os.makedirs(os.path.dirname(work), exist_ok=True)
+    img = _apply_rotation(Image.open(orig).convert("RGB"), rotation)
+    img.save(work, quality=90)
+    return img
+
+
+# ============================================
 # ジョブ・進捗管理（メモリ上、1プロセス前提）
 # ============================================
 
@@ -293,6 +347,8 @@ def process_job(job_id, in_paths, own_band_path, whiteout_map=False):
 
     # 手動修正(edit_page)でも同じ帯を貼れるよう、使った自社帯を記録しておく
     _save_job_band(job_id, own_band_path)
+    # 回転後の再検出でも案内図の扱いを揃えるため、ジョブの設定も残す
+    _save_job_opts(job_id, whiteout_map)
 
     try:
         # 総ページ数を先に数える
@@ -352,6 +408,7 @@ def process_job(job_id, in_paths, own_band_path, whiteout_map=False):
                         "missed": is_missed,
                         "img_w": img_w,
                         "img_h": img_h,
+                        "rotation": 0,
                         "detections": detections,
                         # 白塗りはしないがラベルとしては残す枠（案内図オフのときの map）。
                         # エディタには出さず、学習データに送るときだけ detections に合流させる。
@@ -495,6 +552,10 @@ def _confirmed_path(job_id):
 # 確認済みリストは「読んで足して書く」ので、同時アクセスで消えないようロックする
 confirmed_lock = threading.Lock()
 
+# meta.jsonは「読む→書き換える→保存する」なので、同じジョブを同時に触られると
+# 片方の変更が消える。書き込みは一瞬なのでジョブごとに分けず1つで直列化して十分。
+meta_lock = threading.Lock()
+
 
 def _load_confirmed(job_id):
     """学習データとして記録済みのpage_indexの集合を返す。"""
@@ -520,13 +581,31 @@ def _mark_confirmed(job_id, page_index):
             print(f"[warn] 確認済みの記録に失敗 {job_id}/{page_index}: {e}")
 
 
+def _unmark_confirmed(job_id, page_index):
+    """確認済みの印を外す（回転すると中身が変わるので、確認し直してもらう）。
+
+    既に送った学習データは追記式なので取り消せない。回す前に✓を押していた場合、
+    回転前の画像に対する記録がそのまま残る。運用上は「回してから✓」を促す。
+    """
+    with confirmed_lock:
+        done = _load_confirmed(job_id)
+        done.discard(int(page_index))
+        try:
+            with open(_confirmed_path(job_id), "w", encoding="utf-8") as f:
+                json.dump(sorted(done), f)
+        except Exception as e:
+            print(f"[warn] 確認済みの解除に失敗 {job_id}/{page_index}: {e}")
+
+
 def _send_training_data(job_id, page_index, page_meta, boxes, img_w, img_h, edited):
     """人が確認・修正した1ページを学習データとして送る。
 
     白塗りしない枠(label_only)も一緒に送る。送らないと「ここには何も無い」と
     教えることになり、案内図の検出力が落ちる。
     """
-    orig_path = os.path.join(DIR_OUTPUT, job_id + "_orig", f"page_{page_index}.jpg")
+    # 回転後の画像を送る。元画像を送ると「画像は回転前・座標は回転後」になって
+    # 間違った正解データが静かに混ざる（テストで固定してある）。
+    orig_path = _work_page_path(job_id, page_index)
     if not os.path.exists(orig_path):
         return False
     extra = (page_meta or {}).get("label_only", []) or []
@@ -657,7 +736,7 @@ def thumb_all(job_id, page_index):
 @app.route("/orig_img/<job_id>/<int:page_index>")
 def orig_img(job_id, page_index):
     """帯付け前のキレイな元画像。エディタの背景に使う（枠を編集しやすくするため）。"""
-    path = os.path.join(DIR_OUTPUT, job_id + "_orig", f"page_{page_index}.jpg")
+    path = _work_page_path(job_id, page_index)
     if not os.path.exists(path):
         return "not found", 404
     return send_file(path, mimetype="image/jpeg")
@@ -676,7 +755,7 @@ def edit_page(job_id, page_index):
     if not isinstance(in_rects, list):
         return jsonify({"error": "rectsが不正です"}), 400
 
-    orig_path = os.path.join(DIR_OUTPUT, job_id + "_orig", f"page_{page_index}.jpg")
+    orig_path = _work_page_path(job_id, page_index)
     page_path = os.path.join(DIR_OUTPUT, job_id + "_pages", f"page_{page_index}.jpg")
     if not os.path.exists(orig_path):
         return jsonify({"error": "元ページが見つかりません"}), 404
@@ -724,15 +803,17 @@ def edit_page(job_id, page_index):
         missed = True
         page_meta = None
         meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
-        with open(meta_path, encoding="utf-8") as f:
-            meta = json.load(f)
-        page_meta = next((p for p in meta if p["page_index"] == page_index), None)
-        if page_meta is not None:
-            missed = not any(d["cls"] == "band" for d in rects)
-            page_meta["missed"] = missed
-            page_meta["detections"] = rects
-            with open(meta_path, "w", encoding="utf-8") as f:
-                json.dump(meta, f, ensure_ascii=False)
+        # 読んで書き換えて保存するので、同時アクセスで片方が消えないようロックする
+        with meta_lock:
+            with open(meta_path, encoding="utf-8") as f:
+                meta = json.load(f)
+            page_meta = next((p for p in meta if p["page_index"] == page_index), None)
+            if page_meta is not None:
+                missed = not any(d["cls"] == "band" for d in rects)
+                page_meta["missed"] = missed
+                page_meta["detections"] = rects
+                with open(meta_path, "w", encoding="utf-8") as f:
+                    json.dump(meta, f, ensure_ascii=False)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -778,6 +859,112 @@ def confirm_page(job_id, page_index):
     )
     _mark_confirmed(job_id, page_index)
     return jsonify({"ok": True, "saved": saved})
+
+
+def _job_opts_path(job_id):
+    return os.path.join(DIR_OUTPUT, job_id + "_opts.json")
+
+
+def _save_job_opts(job_id, whiteout_map):
+    """ジョブの設定を残す。回転後の再検出でも同じ扱いにするため。"""
+    try:
+        with open(_job_opts_path(job_id), "w", encoding="utf-8") as f:
+            json.dump({"whiteout_map": bool(whiteout_map)}, f)
+    except Exception as e:
+        print(f"[warn] ジョブ設定を保存できませんでした {job_id}: {e}")
+
+
+def _load_job_opts(job_id):
+    path = _job_opts_path(job_id)
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"whiteout_map": False}
+
+
+@app.route("/rotate_page/<job_id>/<int:page_index>", methods=["POST"])
+def rotate_page(job_id, page_index):
+    """ページを90度単位で回す。{delta: 90 or -90 or 180} を受け取る。
+
+    横向きに登録された販売図面は帯を検出できないので、向きを直せるようにする。
+
+    回した時点で既存の枠は意味を失う（特に帯は「常に全幅」の規約が縦帯になって壊れる）ので
+    全部消す。座標を回転させる計算はできるが、規約が壊れる以上やる価値がない。
+    代わりにもう一度だけ検出して「推奨位置」を返す。貼るかどうかは人が決める。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        delta = int(data.get("delta", 90))
+    except (TypeError, ValueError):
+        return jsonify({"error": "回転角が不正です"}), 400
+    if delta % 90 != 0:
+        return jsonify({"error": "回転は90度単位です"}), 400
+
+    if not os.path.exists(_orig_page_path(job_id, page_index)):
+        return jsonify({"error": "元ページが見つかりません"}), 404
+
+    meta_path = os.path.join(DIR_OUTPUT, job_id + "_meta.json")
+    whiteout_map = _load_job_opts(job_id).get("whiteout_map", False)
+
+    try:
+        with meta_lock:
+            with open(meta_path, encoding="utf-8") as f:
+                meta = json.load(f)
+            page_meta = next((p for p in meta if p["page_index"] == page_index), None)
+            if page_meta is None:
+                return jsonify({"error": "ページが見つかりません"}), 404
+            rotation = (int(page_meta.get("rotation", 0)) + delta) % 360
+            if rotation not in VALID_ROTATIONS:
+                return jsonify({"error": "回転角が不正です"}), 400
+
+            # 元画像から作り直す（上書きを重ねないので画質が落ちない）
+            img = _rebuild_work_page(job_id, page_index, rotation)
+            w, h = img.size
+
+            # 枠を消した状態で出力とサムネも作り直す。
+            # これで「適用して貼り直す」を押す前から、出力PDFは正しい向きになる。
+            img.save(os.path.join(DIR_OUTPUT, job_id + "_pages", f"page_{page_index}.jpg"),
+                     quality=90)
+            thumb = img.copy()
+            thumb.thumbnail(THUMB_SIZE)
+            thumb.save(os.path.join(DIR_OUTPUT, job_id + "_thumbs", f"page_{page_index}.jpg"),
+                       quality=85)
+
+            page_meta["rotation"] = rotation
+            page_meta["img_w"], page_meta["img_h"] = w, h
+            page_meta["detections"] = []
+            page_meta["label_only"] = []
+            page_meta["missed"] = True
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    # 中身が変わったので確認し直してもらう
+    _unmark_confirmed(job_id, page_index)
+
+    # 回した向きでもう一度だけ検出して推奨位置を出す（自動では貼らない）
+    suggestions = []
+    try:
+        for o in detect.detect_objects(img):
+            # 案内図の白塗りがオフなら推奨には出さない（元の処理と同じ扱い）
+            if o["cls"] == "map" and not whiteout_map:
+                continue
+            lr = label_rect(o, w, h)
+            suggestions.append({
+                "cls": o["cls"],
+                "x0": round(lr[0] / w, 4), "y0": round(lr[1] / h, 4),
+                "x1": round(lr[2] / w, 4), "y1": round(lr[3] / h, 4),
+            })
+    except Exception as e:
+        # 検出に失敗しても回転自体は成功している。人が手で置けばいい。
+        print(f"[warn] 回転後の再検出に失敗 {job_id}/{page_index}: {e}")
+
+    return jsonify({"ok": True, "rotation": rotation, "img_w": w, "img_h": h,
+                    "suggestions": suggestions, "ts": int(time.time())})
 
 
 @app.route("/download/<job_id>")

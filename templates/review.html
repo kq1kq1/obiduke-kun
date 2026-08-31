@@ -254,6 +254,11 @@
   .btn-add.c-logo  { border-left-color: #c84b2f; }
   .btn-add.c-map   { border-left-color: #2a6f8f; }
   .btn-add.c-other { border-left-color: #6b6560; }
+  .btn-rot { border-left-width: 1.5px; font-size: 0.82rem; }
+  .btn-rot:disabled { opacity: 0.5; cursor: default; }
+  .rot-note {
+    margin-top: 7px; font-size: 0.71rem; line-height: 1.6; color: var(--text-muted);
+  }
   .box-info {
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
     padding: 10px 12px; font-size: 0.8rem; line-height: 1.7;
@@ -401,6 +406,17 @@
             <b style="color:#c88010">橙＝帯（自社帯に差し替え）</b><br>
             <b style="color:#c84b2f">赤＝ロゴ</b> / <b style="color:#2a6f8f">青＝案内図</b> / <b style="color:#6b6560">灰＝その他</b>（白塗りのみ）<br>
             背景は帯を貼る前の元画像です。
+          </div>
+        </div>
+        <div>
+          <div class="panel-label">ページの向き</div>
+          <div class="add-row">
+            <button class="btn-add btn-rot" type="button" onclick="rotatePage(-90)">↺ 左90°</button>
+            <button class="btn-add btn-rot" type="button" onclick="rotatePage(90)">↻ 右90°</button>
+          </div>
+          <div class="rot-note">
+            横向きで登録された図面を直せます。<b>回すと枠は引き直し</b>になり、
+            もう一度だけ検出して推奨位置を出します。✓を押すのは回転を済ませてから。
           </div>
         </div>
         <div>
@@ -666,20 +682,7 @@ async function applyEdits() {
     if (th) th.src = `/thumb_all/${JOB_ID}/${curPage}?t=${data.ts}`;
 
     // カードの状態を更新
-    const card  = document.getElementById(`card-${curPage}`);
-    const badge = document.getElementById(`badge-${curPage}`);
-    const lbl   = document.getElementById(`label-${curPage}`);
-    if (card) {
-      card.classList.remove('missed', 'ok', 'manually-done');
-      if (data.missed) {
-        card.classList.add('missed');
-        if (badge) { badge.className = 'thumb-status status-miss'; badge.textContent = '未検出'; }
-      } else {
-        card.classList.add('manually-done');
-        if (badge) { badge.className = 'thumb-status status-manual'; badge.textContent = '手動'; }
-        if (lbl) lbl.style.color = '';
-      }
-    }
+    setCardState(curPage, data.missed, true);
     updateCounts();
 
     // 直した内容はそのまま正解データ。確認済みとして扱う（サーバ側で記録済み）
@@ -706,6 +709,82 @@ function updateCounts() {
   document.getElementById('hdr-miss').textContent = `未検出 ${miss}ページ`;
   document.getElementById('hdr-ok').textContent  = `検出済 ${ok}ページ`;
   document.getElementById('hdr-learn').textContent = `学習に記録 ${confirmedSet.size}ページ`;
+}
+
+// ===== カードの見た目を更新 =====
+function setCardState(idx, missed, manual) {
+  const card  = document.getElementById(`card-${idx}`);
+  const badge = document.getElementById(`badge-${idx}`);
+  const lbl   = document.getElementById(`label-${idx}`);
+  if (!card) return;
+  card.classList.remove('missed', 'ok', 'manually-done');
+  if (missed) {
+    card.classList.add('missed');
+    if (badge) { badge.className = 'thumb-status status-miss'; badge.textContent = '未検出'; }
+  } else {
+    card.classList.add(manual ? 'manually-done' : 'ok');
+    if (badge) {
+      badge.className = 'thumb-status ' + (manual ? 'status-manual' : 'status-ok');
+      badge.textContent = manual ? '手動' : '検出済';
+    }
+    if (lbl) lbl.style.color = '';
+  }
+}
+
+// ===== ページの回転 =====
+// 横向きで登録された販売図面は帯が検出できないので、90度単位で直せるようにする。
+// 回すと既存の枠は意味を失う（帯は「常に全幅」の規約が縦帯になって壊れる）ので作り直し、
+// サーバ側でもう一度だけ検出した結果を「推奨位置」として置く。貼るかは人が決める。
+let rotating = false;
+async function rotatePage(delta) {
+  if (curPage === null || rotating) return;
+  rotating = true;
+  const res  = document.getElementById('apply-result');
+  const btns = [...document.querySelectorAll('.btn-rot')];
+  btns.forEach(b => b.disabled = true);
+  res.className = 'apply-result ok';
+  res.textContent = '回転中...';
+  res.style.display = 'block';
+  try {
+    const r = await fetch(`/rotate_page/${JOB_ID}/${curPage}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delta }),
+    });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error || 'エラー');
+
+    boxes = (data.suggestions || []).map(b => ({
+      cls: normCls(b.cls), x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1,
+    }));
+    PAGE_DATA[curPage] = boxes.map(b => ({ ...b }));
+    selIdx = -1;
+
+    // 背景とサムネを差し替える（?t= でブラウザのキャッシュを避ける）
+    imgEl.onload = () => { renderBoxes(); updatePanel(); };
+    imgEl.src = `/orig_img/${JOB_ID}/${curPage}?t=${data.ts}`;
+    const th = document.getElementById(`thumb-${curPage}`);
+    if (th) th.src = `/thumb_all/${JOB_ID}/${curPage}?t=${data.ts}`;
+
+    // サーバ側で枠を消したので、貼り直すまでは未検出扱い。確認済みも外れている
+    confirmedSet.delete(curPage);
+    const card = document.getElementById(`card-${curPage}`);
+    if (card) card.classList.remove('confirmed');
+    setCardState(curPage, true, false);
+    syncConfirmModalBtn();
+    updateCounts();
+
+    const n = boxes.length;
+    res.textContent = n
+      ? `✓ 回転しました（推奨位置を${n}件表示。確認して「適用して貼り直す」）`
+      : '✓ 回転しました（検出なし。「＋帯」で追加してください）';
+  } catch (e) {
+    res.className = 'apply-result err';
+    res.textContent = '✗ ' + e.message;
+  } finally {
+    rotating = false;
+    btns.forEach(b => b.disabled = false);
+  }
 }
 
 // ===== 「これで正しい」の記録（再学習の教材にする） =====
@@ -760,10 +839,9 @@ async function confirmFromModal() {
 }
 
 function setCardOrientation(imgEl, cardId) {
-  if (imgEl.naturalWidth > imgEl.naturalHeight) {
-    const card = document.getElementById(cardId);
-    if (card) card.classList.add('landscape');
-  }
+  const card = document.getElementById(cardId);
+  // 回転でサムネの縦横が変わるので、付けっぱなしにせず毎回切り替える
+  if (card) card.classList.toggle('landscape', imgEl.naturalWidth > imgEl.naturalHeight);
 }
 
 // ウィンドウサイズ変更時は枠を描き直す（画像の表示サイズが変わるため）
