@@ -7,7 +7,12 @@
 #
 # 使い方（PowerShellで）:
 #   .\redeploy_hf.ps1
-#   （HFの Write トークンを聞かれるので貼る。トークンは画面に表示されず、保存もされない）
+#   （SSH鍵で認証するので、トークンの入力は不要）
+#
+# 認証: HFへのpushは SSH鍵（~/.ssh/id_ed25519）で行う。トークン方式をやめたのは、
+#   作り直すたびに古いトークンが無効になり、貼り直しを忘れて詰まるため。鍵には
+#   有効期限が無いので、一度登録すれば以後は何も聞かれない。
+#   公開鍵の登録先: https://huggingface.co/settings/keys
 #
 # 事前に: 変更を main にコミット済みにしておくこと（このスクリプトはコミットはしない）。
 #
@@ -19,7 +24,7 @@
 
 $ErrorActionPreference = "Continue"
 $Space = "https://huggingface.co/spaces/kq1kq1/obiduke-kun"
-$HfUser = "kq1kq1"
+$HfRemote = "git@hf.co:spaces/kq1kq1/obiduke-kun"
 $DeployBranch = "hf-deploy"
 
 # リポジトリのルートへ移動（スクリプトのある場所）
@@ -54,12 +59,18 @@ if ($startBranch -ne "main") {
     if ($ans -ne "y") { Write-Host "中断しました。"; exit 1 }
 }
 
-# HFトークンを安全に入力（画面非表示）
-$secure = Read-Host -Prompt "HFのWriteトークンを貼ってEnter" -AsSecureString
-$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-$token = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-if (-not $token) { Write-Host "トークンが空です。中断します。" -ForegroundColor Red; exit 1 }
+# SSHで認証できるか先に確かめる。ブランチを作り替える前に落としたいのでここで見る。
+Write-Host "HFへのSSH接続を確認中..." -ForegroundColor Cyan
+# 判定の注意: 鍵が未登録でも接続自体は通り "Hi anonymous" が返る（拒否されない）。
+#   なので "Permission denied" だけを見ると素通りしてしまう。名乗った名前まで見る。
+$sshOut = ssh -o BatchMode=yes -o ConnectTimeout=20 -T git@hf.co 2>&1
+if ($sshOut -notmatch "Hi kq1kq1") {
+    Write-Host "HFにSSH鍵で認証できませんでした。" -ForegroundColor Red
+    Write-Host "  応答: $sshOut" -ForegroundColor Red
+    Write-Host "  この公開鍵を https://huggingface.co/settings/keys に登録してください:" -ForegroundColor Red
+    Write-Host "  $env:USERPROFILE\.ssh\id_ed25519.pub" -ForegroundColor Red
+    exit 1
+}
 
 $ok = $false
 try {
@@ -81,8 +92,7 @@ try {
     Assert-Git "デプロイ用コミットの作成"
 
     Write-Host "`n[3/3] HF Space に force push..." -ForegroundColor Cyan
-    $remote = "https://$($HfUser):$($token)@huggingface.co/spaces/kq1kq1/obiduke-kun"
-    git push $remote "$($DeployBranch):main" --force
+    git push $HfRemote "$($DeployBranch):main" --force
     Assert-Git "HFへのpush"
     $ok = $true
 }
