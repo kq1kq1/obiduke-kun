@@ -490,6 +490,7 @@ $env:HF_TOKEN = "hf_xxx"
 - 再デプロイは `main` を前提にしたスクリプト（`git push origin main` と `git checkout main` をする）。**ワークツリーからは実行できない**ので、変更を `main` にマージしてから本体フォルダで実行する。
 
 - 画像・モデルは **GitHub にも入っている**（GitHubはLFSなしで100MBまでのバイナリを持てる）。GitHubがフル履歴・バックアップ、HFが公開・実行先。
+- GitHub / HF ともリモートは **SSH**（`git@github.com:...` / `git@hf.co:spaces/...`）。トークンは使わない。
 
 ### 再デプロイ手順
 
@@ -501,8 +502,39 @@ git commit -m "変更内容"
 .\redeploy_hf.ps1   # GitHub push → HFへLFS付き単一コミットをforce push まで自動
 ```
 
-実行するとHFの **Write トークン** を聞かれるので貼る（画面に表示されず保存もされない）。
-トークンは https://huggingface.co/settings/tokens で発行（使い終わったら失効可）。
+認証は **SSH鍵** で行うので、トークンの入力は不要（何も聞かれずに完了する）。
+
+#### 新しいPCで初めてデプロイするとき
+
+SSH鍵はPCごとに作る。1台につき1鍵にしておくと、そのPCを手放すときにその鍵だけ
+失効させればよく、他のPCが巻き添えにならない。
+
+```powershell
+ssh-keygen -t ed25519 -C "メールアドレス" -f "$env:USERPROFILE\.ssh\id_ed25519" -N '""'
+Get-Content "$env:USERPROFILE\.ssh\id_ed25519.pub"
+```
+
+表示された公開鍵を、次の2箇所に同じ名前（PCが分かる名前）で登録する。
+
+- HF: https://huggingface.co/settings/keys （Add SSH Key）
+- GitHub: https://github.com/settings/keys （New SSH key）
+
+確認は次のコマンド。どちらも名前を名乗れば成功。
+
+```powershell
+ssh -T git@hf.co          # → Hi kq1kq1, welcome to Hugging Face.
+ssh -T git@github.com     # → Hi kq1kq1! You've successfully authenticated...
+```
+
+**注意**: HFは鍵が未登録でも接続自体は通り `Hi anonymous` を返す（拒否されない）。
+名乗った名前まで見ないと登録漏れに気づけない。`redeploy_hf.ps1` の事前チェックも
+この点を見ている。
+
+鍵を無効化したいときは、登録した2箇所それぞれで削除する（片方だけ消しても、
+もう片方は使えるままなので注意）。
+
+> トークン方式をやめた理由: トークンは作り直すたびに古いものが無効になるため、
+> 貼り直しを忘れて詰まりやすい。SSH鍵には有効期限が無く、貼り付け作業も要らない。
 
 <details>
 <summary>スクリプトを使わず手動でやる場合</summary>
@@ -514,7 +546,7 @@ git rm -r --cached . > $null
 git lfs track "*.pt" "*.png" "*.jpg" "*.jpeg" "*.bin"
 git add .gitattributes; git add -A
 git commit -m "HFデプロイ"
-git push "https://ユーザー名:HFトークン@huggingface.co/spaces/kq1kq1/obiduke-kun" hf-deploy:main --force
+git push git@hf.co:spaces/kq1kq1/obiduke-kun hf-deploy:main --force
 git checkout main
 git branch -D hf-deploy
 ```
