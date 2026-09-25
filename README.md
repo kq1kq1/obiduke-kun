@@ -13,6 +13,9 @@ pinned: false
 マイソク（不動産チラシPDF）の **他社帯** を自動で白塗りし、登録した **自社帯** に差し替えるWebツール。社内数人での利用を想定。
 
 **公開URL（Hugging Face Spaces）**: https://huggingface.co/spaces/kq1kq1/obiduke-kun
+
+> 作業を引き継ぐとき・別のPCで始めるときは [HANDOFF.md](HANDOFF.md) を先に読む。
+> 「今どうなっていて、次に何をするか」だけをまとめてある。
 （Publicなら誰でもブラウザから利用可。HFアカウント不要）
 
 ## 何をするか
