@@ -390,8 +390,8 @@ Roboflowの学習分（bandを全幅に統一）と凍結検証セットを `bas
 一度だけ環境を作る:
 
 ```powershell
-.	ools\setup_train_env.ps1          # GPU確認 → venv → CUDA版torch → 依存 → 動作確認
-.	ools\setup_train_env.ps1 -Cuda cu124   # ドライバが古くて失敗するとき
+.\tools\setup_train_env.ps1          # GPU確認 → venv → CUDA版torch → 依存 → 動作確認
+.\tools\setup_train_env.ps1 -Cuda cu124   # ドライバが古くて失敗するとき
 ```
 
 > `requirements.txt` は **torchのCPU版を明示している**（HF Spacesの無料CPU環境向け）。
@@ -401,9 +401,9 @@ Roboflowの学習分（bandを全幅に統一）と凍結検証セットを `bas
 あとは毎回これだけ:
 
 ```powershell
-.env\Scripts\Activate.ps1
+.\venv\Scripts\Activate.ps1
 hf auth login          # 初回のみ
-python tools	rain_new_model.py kq1kq1/obiduke-training-data --epochs 150
+python tools\train_new_model.py kq1kq1/obiduke-training-data --epochs 150
 ```
 
 `--device` の指定は不要（GPUがあれば自動で使う）。
