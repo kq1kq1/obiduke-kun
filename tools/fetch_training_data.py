@@ -63,6 +63,29 @@ def load_records(data_dir):
     return latest, ok_lines, bad_lines
 
 
+def download_dataset(repo_id, token, dest):
+    """Hubからデータセットを落とす。
+
+    既定のキャッシュ方式（blobs＋シンボリックリンク）は、Windowsでシンボリックリンクが
+    使えないと **0バイトのファイルで失敗する**。学習データには「枠が0個のページ」の
+    ラベルが0バイトで入っている（背景画像として必要）ので、そこで必ず止まっていた。
+
+    フォルダへ直接落とす local_dir 方式にすればこの構造を使わないので避けられる。
+    それでも駄目なときは Xet 転送を切って一度だけやり直す。
+    """
+    from huggingface_hub import snapshot_download
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    kw = dict(repo_id=repo_id, repo_type="dataset", token=token, local_dir=str(dest))
+    try:
+        return Path(snapshot_download(**kw))
+    except Exception as e:
+        print(f"[warn] ダウンロードに失敗しました: {e}")
+        print("       Xet転送を切ってやり直します...")
+        os.environ["HF_HUB_DISABLE_XET"] = "1"
+        return Path(snapshot_download(**kw))
+
+
 MSG_NO_TOKEN = """エラー: HFのアクセストークンが見つかりません。どちらかをしてください。
 
   A) 一度ログインしておく（以後ずっと不要になる・おすすめ）
@@ -98,7 +121,8 @@ def main():
     ap = argparse.ArgumentParser(description="学習データを取り出してYOLO形式に組み立てる")
     ap.add_argument("repo_id", help="例: kq1kq1/obiduke-training-data")
     ap.add_argument("--out", default="collected", help="出力フォルダ（既定: collected）")
-    ap.add_argument("--cache", default=None, help="ダウンロード先（既定: HFのキャッシュ）")
+    ap.add_argument("--cache", default="datasets/hub",
+                    help="ダウンロード先（既定: datasets/hub。2回目以降は差分だけ落とす）")
     ap.add_argument("--squash", action="store_true",
                     help="取り出し後にリポジトリの履歴を1コミットに畳む（データは消えない・履歴のみ消える）")
     args = ap.parse_args()
@@ -109,16 +133,15 @@ def main():
         return 1
 
     try:
-        from huggingface_hub import HfApi, snapshot_download
+        from huggingface_hub import HfApi
     except ImportError:
         print("エラー: huggingface_hub が入っていません。 pip install huggingface_hub", file=sys.stderr)
         return 1
 
-    print(f"ダウンロード中: {args.repo_id}")
+    print(f"ダウンロード中: {args.repo_id} → {args.cache}")
+    print("  （初回は数分かかります。2回目以降は差分だけ）")
     try:
-        local = Path(snapshot_download(
-            repo_id=args.repo_id, repo_type="dataset", token=token, local_dir=args.cache,
-        ))
+        local = download_dataset(args.repo_id, token, args.cache)
     except Exception as e:
         print(f"エラー: ダウンロードに失敗しました: {e}", file=sys.stderr)
         return 1

@@ -35,3 +35,6 @@ training_data/
 collected/
 # 学習・検証用データ（重い。GitにもHF Spacesにも上げない）
 datasets/
+
+# Hubから落としたデータのキャッシュ（datasets/ で既に除外済みだが明示）
+datasets/hub/

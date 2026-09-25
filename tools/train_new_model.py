@@ -50,9 +50,26 @@ RECALL_TOLERANCE = 0.0
 
 
 def download(repo_id, token, workdir):
+    """Hubからデータセットを落とす。
+
+    既定のキャッシュ方式（blobs＋シンボリックリンク）は、Windowsでシンボリックリンクが
+    使えないと **0バイトのファイルで失敗する**。学習データには「枠が0個のページ」の
+    ラベルが0バイトで入っている（背景画像として必要）ので、そこで止まる。
+    フォルダへ直接落とす local_dir 方式ならこの構造を使わないので避けられる。
+    それでも駄目なときは Xet 転送を切って一度だけやり直す。
+    """
     from huggingface_hub import snapshot_download
-    print(f"Hubから取得中: {repo_id}")
-    local = Path(snapshot_download(repo_id=repo_id, repo_type="dataset", token=token))
+    dest = Path(workdir) / "hub"
+    dest.mkdir(parents=True, exist_ok=True)
+    print(f"Hubから取得中: {repo_id} → {dest}")
+    kw = dict(repo_id=repo_id, repo_type="dataset", token=token, local_dir=str(dest))
+    try:
+        local = Path(snapshot_download(**kw))
+    except Exception as e:
+        print(f"[warn] ダウンロードに失敗しました: {e}")
+        print("       Xet転送を切ってやり直します...")
+        os.environ["HF_HUB_DISABLE_XET"] = "1"
+        local = Path(snapshot_download(**kw))
     print(f"  {local}")
     return local
 
