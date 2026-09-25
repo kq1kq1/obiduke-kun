@@ -79,6 +79,37 @@ def copy_split(src_img_dir, src_lbl_dir, dst_root, relabel, exclude_keys=None):
     return n, skipped
 
 
+MSG_NO_TOKEN = """エラー: HFのアクセストークンが見つかりません。どちらかをしてください。
+
+  A) 一度ログインしておく（以後ずっと不要になる・おすすめ）
+       hf auth login
+
+  B) この端末セッションだけ設定する
+       $env:HF_TOKEN = Read-Host "HFトークンを貼ってEnter"
+
+  トークンは https://huggingface.co/settings/tokens で発行（Write権限）。
+  ※ Spaceのデプロイに使うSSH鍵とは別物。こちらはHF Datasetの読み書き用。"""
+
+
+def get_hf_token():
+    """HFのアクセストークンを探す。
+
+    1. 環境変数 HF_TOKEN / HUGGINGFACE_TOKEN
+    2. `hf auth login` で保存したもの（~/.cache/huggingface/token）
+
+    2があれば毎回 $env:HF_TOKEN を設定しなくて済む。
+    Colabのように保存が効かない環境では1を使う。
+    """
+    tok = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    if tok:
+        return tok.strip()
+    try:
+        from huggingface_hub import get_token
+        return get_token()
+    except Exception:
+        return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="土台データをHF Datasetリポジトリに置く")
     ap.add_argument("repo_id", help="例: kq1kq1/obiduke-training-data")
@@ -87,10 +118,9 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="送らずに中身だけ確認する")
     args = ap.parse_args()
 
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    token = get_hf_token()
     if not token and not args.dry_run:
-        print('エラー: 環境変数 HF_TOKEN を設定してください。\n'
-              '       PowerShell:  $env:HF_TOKEN = "hf_xxx"', file=sys.stderr)
+        print(MSG_NO_TOKEN, file=sys.stderr)
         return 1
 
     rf = Path(args.roboflow)

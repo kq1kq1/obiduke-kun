@@ -205,9 +205,15 @@ Space の Settings > Variables and secrets に登録する。**未設定なら�
 ### 貯まったデータの確認・取り出し
 
 ```powershell
-$env:HF_TOKEN = "hf_xxx"
+hf auth login          # 一度だけ。以後トークンの入力は不要
 python tools/fetch_training_data.py kq1kq1/obiduke-training-data --out collected
 ```
+
+> **トークンとSSH鍵は別物。** Spaceへのデプロイ（`redeploy_hf.ps1`）はSSH鍵を使うので
+> トークンは要らないが、**HF Datasetの読み書きにはアクセストークンが要る**。
+> `hf auth login` で一度保存すれば `~/.cache/huggingface/token` に残り、
+> 以後スクリプトが自動で拾う。Colabのように保存が効かない環境では
+> `os.environ['HF_TOKEN'] = 'hf_xxx'` を使う。
 
 `collected/images/` と `collected/labels/` がYOLO形式で出力され、内訳（ページ数・クラス別の枠の数・
 枠0個のページ数）が表示される。データがまともに貯まっているかはこれで確認する。

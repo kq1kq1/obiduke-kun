@@ -63,6 +63,37 @@ def load_records(data_dir):
     return latest, ok_lines, bad_lines
 
 
+MSG_NO_TOKEN = """エラー: HFのアクセストークンが見つかりません。どちらかをしてください。
+
+  A) 一度ログインしておく（以後ずっと不要になる・おすすめ）
+       hf auth login
+
+  B) この端末セッションだけ設定する
+       $env:HF_TOKEN = Read-Host "HFトークンを貼ってEnter"
+
+  トークンは https://huggingface.co/settings/tokens で発行（Write権限）。
+  ※ Spaceのデプロイに使うSSH鍵とは別物。こちらはHF Datasetの読み書き用。"""
+
+
+def get_hf_token():
+    """HFのアクセストークンを探す。
+
+    1. 環境変数 HF_TOKEN / HUGGINGFACE_TOKEN
+    2. `hf auth login` で保存したもの（~/.cache/huggingface/token）
+
+    2があれば毎回 $env:HF_TOKEN を設定しなくて済む。
+    Colabのように保存が効かない環境では1を使う。
+    """
+    tok = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    if tok:
+        return tok.strip()
+    try:
+        from huggingface_hub import get_token
+        return get_token()
+    except Exception:
+        return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="学習データを取り出してYOLO形式に組み立てる")
     ap.add_argument("repo_id", help="例: kq1kq1/obiduke-training-data")
@@ -72,10 +103,9 @@ def main():
                     help="取り出し後にリポジトリの履歴を1コミットに畳む（データは消えない・履歴のみ消える）")
     args = ap.parse_args()
 
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    token = get_hf_token()
     if not token:
-        print("エラー: 環境変数 HF_TOKEN を設定してください（privateリポジトリの読み取りに必要）。\n"
-              '       PowerShell:  $env:HF_TOKEN = "hf_xxx"', file=sys.stderr)
+        print(MSG_NO_TOKEN, file=sys.stderr)
         return 1
 
     try:
