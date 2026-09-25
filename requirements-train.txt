@@ -1,0 +1,22 @@
+# GPUを積んだPCで再学習するとき用。requirements.txt とは別物。
+#
+# なぜ分けるか:
+#   requirements.txt は HF Spaces（GPUなしの無料CPU環境）向けで、torchのCPU版を
+#   明示している。そのまま入れるとGPUがあっても使われない。
+#
+# torch はここに書かない:
+#   CUDAのビルド（cu124 / cu128 …）はドライバに合わせて選ぶ必要があり、
+#   requirements に固定すると環境によって入らない。先に torch を入れてから
+#   このファイルを使う。tools/setup_train_env.ps1 が両方まとめてやる。
+#
+# 使い方:
+#   .\tools\setup_train_env.ps1          （推奨。torchも含めて全部入れる）
+#
+#   手でやるなら:
+#     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#     pip install -r requirements-train.txt
+
+ultralytics
+huggingface_hub>=0.30.0
+pillow
+numpy

@@ -383,7 +383,34 @@ Roboflowの学習分（bandを全幅に統一）と凍結検証セットを `bas
 
 ### 毎回: 再学習して判定する
 
-Colab（無料GPU）で:
+**GPUを積んだPCがあるならそちらが楽。** 切断で消える心配が無く、データの再ダウンロードも要らない。
+
+#### A. 手元のGPUで回す（推奨）
+
+一度だけ環境を作る:
+
+```powershell
+.	ools\setup_train_env.ps1          # GPU確認 → venv → CUDA版torch → 依存 → 動作確認
+.	ools\setup_train_env.ps1 -Cuda cu124   # ドライバが古くて失敗するとき
+```
+
+> `requirements.txt` は **torchのCPU版を明示している**（HF Spacesの無料CPU環境向け）。
+> そのまま入れるとGPUがあっても使われないので、学習用は `requirements-train.txt` と
+> このスクリプトを使う。
+
+あとは毎回これだけ:
+
+```powershell
+.env\Scripts\Activate.ps1
+hf auth login          # 初回のみ
+python tools	rain_new_model.py kq1kq1/obiduke-training-data --epochs 150
+```
+
+`--device` の指定は不要（GPUがあれば自動で使う）。
+
+#### B. Colab（無料GPU・出先向け）
+
+
 
 ```python
 !git clone https://github.com/kq1kq1/obiduke-kun && cd obiduke-kun
@@ -426,6 +453,24 @@ ultralyticsは「**検証成績がいちばん良かったエポック**」を `
 
 帯の見逃しは赤い「未検出」になって手作業が増えるので、**誤検出がどれだけ減っても
 見逃しが増えたら採用しない**。
+
+#### どのくらいのGPUが要るか
+
+実測（YOLOv8n / batch16 / imgsz640）:
+
+| | 時間 | VRAM |
+|---|---|---|
+| Colab の Tesla T4 | 247枚150エポックで13.7分 | **2.26GB** |
+| 同じ条件で568枚 | 約30分 | 同上 |
+| RTX 3060 12GB | 15〜20分の見込み | 同上 |
+
+**VRAMは2.3GBしか使っていない**ので、8GBのGPUでも十分すぎる。
+ただしこれは一番小さい YOLOv8n（300万パラメータ）を使っているから。
+大きいモデルにすると必要量は大きく増える（v8m で約7GB、v8x で約14GB）。
+
+**そしてモデルを大きくする選択肢は現状取れない。** 本番がHF Spacesの無料CPUなので、
+v8n で1ページ380ms、v8s なら約1秒、v8m なら約2秒かかる。25ページのPDFで
+10秒 → 50秒になってしまう。**ボトルネックはGPUではなくデプロイ先のCPU。**
 
 ### 採用するとき
 
@@ -587,6 +632,8 @@ git branch -D hf-deploy
 | `tools/selfcheck_rotation.py` | 回転まわりの自己チェック（デプロイ前に流す） |
 | `tools/selfcheck_sampling.py` | 学習データの抜き取りの自己チェック（デプロイ前に流す） |
 | `tools/correction_rate.py` | 本番での手直し率を出す（凍結検証セットでは測れない改善を見る） |
+| `tools/setup_train_env.ps1` | GPUのあるPCに学習環境を作る（CUDA版torchを入れる） |
+| `requirements-train.txt` | 学習用の依存（`requirements.txt` はCPU版torch固定なので別にしてある） |
 | `tools/upload_base_dataset.py` | 土台データをHFに置く（一度だけ） |
 | `tools/train_new_model.py` | 再学習して、良くなったかを判定する |
 | `eval/` | 検証セットの定義と基準スコア（Git管理） |
