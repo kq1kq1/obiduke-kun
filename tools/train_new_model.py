@@ -196,7 +196,22 @@ def judge(base, new):
 
     if blocking:
         return "採用しない", reasons
-    if d_rec > 0 or d_pre > 0 or d_missing < 0:
+
+    # 凍結検証セットが天井に張り付いていると、改善しても数字が動かない。
+    # band再現率1.000・帯の未検出0 の状態では「上がる余地が無い」ので、
+    # 「変わらない＝改善していない」とは言えない。悪化していないことを確認して通す。
+    at_ceiling = bb["band"]["recall"] >= 1.0 and base["pages_missing_band"] == 0
+    improved = (d_rec > 0 or d_pre > 0 or d_missing < 0
+                or any(nn[c]["f1"] > bb[c]["f1"] for c in ("logo", "map")))
+    worsened_soft = any(nn[c]["recall"] < bb[c]["recall"] for c in ("logo", "map"))
+
+    if improved:
+        return "採用してよい", reasons
+    if at_ceiling and not worsened_soft:
+        reasons.append("検証セットが天井（band再現率1.000・未検出0）のため、"
+                       "これ以上の改善は測れない。悪化が無いので通してよい")
+        reasons.append("本当に良くなったかは本番の手直し率で測る: "
+                       "python tools/correction_rate.py --since <差し替えた日>")
         return "採用してよい", reasons
     return "判断が必要", reasons
 
