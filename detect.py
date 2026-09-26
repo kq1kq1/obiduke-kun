@@ -7,7 +7,10 @@ Roboflowでラベル付けした画像でfine-tuningしたYOLOv8モデルを使�
 
 高速化:
 - Intel CPU(HF Spaces含む)では OpenVINO 形式の方が PyTorch より速いので、
-  変換済みの best_openvino_model/ があれば優先して使う（無ければ best.pt にフォールバック）。
+  変換済みのものがあれば優先して使う。INT8版 → FP32版 → best.pt の順に探す。
+- INT8版は FP32版より約2倍速く、凍結検証セットの成績は同じ。ただし枠がまれに
+  わずかに内側に出るので、app.paste_rect() の余白をそのぶん広げてある。
+  INT8版に問題が出たら best_int8_openvino_model/ を消せば FP32版に戻る。
 - 起動時に warmup() を呼ぶと初回のモデルコンパイル(数十秒)を先に済ませられる。
 """
 import os
@@ -16,6 +19,7 @@ import threading
 from ultralytics import YOLO
 
 BASE = os.path.dirname(os.path.abspath(__file__))
+INT8_DIR = os.path.join(BASE, "best_int8_openvino_model")
 OPENVINO_DIR = os.path.join(BASE, "best_openvino_model")
 PT_PATH = os.path.join(BASE, "best.pt")
 
@@ -34,15 +38,17 @@ _infer_lock = threading.Lock()
 def _get_model():
     """モデルを一度だけ読み込む（スレッドセーフ・初回のみ）。
 
-    OpenVINO形式があればそれを、無ければ .pt を使う。
+    INT8版 → FP32版のOpenVINO形式 → .pt の順に、見つかったものを使う。
     """
     global _model
     if _model is None:
         with _model_lock:
             if _model is None:
-                if os.path.isdir(OPENVINO_DIR):
-                    # task を明示しておくと推論時の警告が出ない
-                    _model = YOLO(OPENVINO_DIR, task="detect")
+                for d in (INT8_DIR, OPENVINO_DIR):
+                    if os.path.isdir(d):
+                        # task を明示しておくと推論時の警告が出ない
+                        _model = YOLO(d, task="detect")
+                        break
                 else:
                     _model = YOLO(PT_PATH)
     return _model

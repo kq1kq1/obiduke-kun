@@ -26,3 +26,5 @@ numpy
 openvino>=2024.0.0
 flask
 pymupdf
+# INT8版の書き出し（本番は INT8版を使う。README「検出を速くする」を参照）
+nncf>=2.14.0

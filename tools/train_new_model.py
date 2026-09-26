@@ -160,6 +160,13 @@ def build_dataset(hub_dir, out_dir, val_every=10):
         f"path: {out_dir.resolve().as_posix()}\n"
         f"train: train/images\nval: val/images\n\n"
         f"nc: {len(NAMES)}\nnames: {NAMES}\n", encoding="utf-8")
+    # INT8変換のキャリブレーション用。ultralyticsは val を読むので、val に学習データを指す。
+    # 凍結検証セットを使うと、その29枚に都合よく調整されてしまう
+    (out_dir / "calib.yaml").write_text(
+        f"# INT8 のキャリブレーション用（学習データから統計を取る）\n"
+        f"path: {out_dir.resolve().as_posix()}\n"
+        f"train: train/images\nval: train/images\n\n"
+        f"nc: {len(NAMES)}\nnames: {NAMES}\n", encoding="utf-8")
     return n_train, n_val, n_frozen, n_col
 
 
@@ -356,17 +363,24 @@ def main():
         print(f"（スコアは {out} に残してある）")
         return 2
 
+    calib = (ds / "calib.yaml").as_posix()
     print(f"\n新しい重み: {weights}")
     print("\n採用する手順:")
     print(f"  1. {weights} をプロジェクト直下の best.pt に上書き")
     print('  2. python -c "from ultralytics import YOLO; '
           "YOLO('best.pt').export(format='openvino', imgsz=640)\"")
+    # 本番は INT8版を使う（detect.py）。作り忘れると古いモデルのINT8版が本番に残る
+    print('  3. python -c "from ultralytics import YOLO; '
+          f"YOLO('best.pt').export(format='openvino', imgsz=640, quantize=8, data='{calib}')\"")
     # 基準スコアは fullwidth 規約で測ってある。--labels を省くと orig 規約で測って
     # 別の物差しで基準を上書きしてしまう（labels と labels_fullwidth は中身が違う）
-    print("  3. python tools/eval_model.py best.pt --labels fullwidth   ← 上書き後にもう一度確認")
-    print(f"  4. python tools/eval_model.py best.pt --labels fullwidth --save {BASELINE}"
+    print("  4. python tools/eval_model.py best.pt --labels fullwidth   ← 上書き後にもう一度確認")
+    # 判定は PyTorch版で出しているが、本番は OpenVINO版。しきい値付近の検出が変わることがある
+    print("  5. python tools/eval_model.py best_int8_openvino_model --labels fullwidth"
+          "   ← 本番が使う形式でも確認（前のモデルのINT8版と比べて悪くないか）")
+    print(f"  6. python tools/eval_model.py best.pt --labels fullwidth --save {BASELINE}"
           "   ← 基準を更新")
-    print("  5. git commit して .\\redeploy_hf.ps1")
+    print("  7. git commit して .\\redeploy_hf.ps1")
     if decision == "判断が必要":
         print("\n※ 明確に良くなってはいない。検証セットは29枚と小さいので、"
               "差が小さいときは見送るのが安全。")

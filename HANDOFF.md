@@ -30,7 +30,8 @@ YOLOで検出 → 白塗り → 自社帯を貼る → レビュー画面で人�
 
 ### 使っているモデル
 
-`best.pt`（YOLOv8n）＋ `best_openvino_model/`（本番はこちらを使う・FP32）。
+`best.pt`（YOLOv8n）＋ `best_int8_openvino_model/`（**本番はこれを使う・INT8**）＋
+`best_openvino_model/`（FP32。INT8版を消すとこちらに戻る）。
 **2026-09-26 にデスクトップで再学習したもの**。前のモデル（2026-08-31・Roboflow v4 のみ）から
 続きを150エポック。学習525枚のうち蓄積データ338ページを初めて入れた。
 
@@ -63,14 +64,12 @@ band=340 logo=117 map=195（案内図のあるページ 176）/ 枠が0個のペ
 
 ## 次にやること
 
-### 1. INT8量子化（検証済み・未適用）← 次
+### 1. INT8量子化 → 2026-09-26 に採用済み
 
-**検出が1.74倍速くなり、凍結検証セットでの精度は完全に同じ**だった（前のモデルで実測）。
-ただし検出枠がわずかに小さく出るので、`paste_rect()` のパディングを
-`H * 0.006` → `0.010` に増やす必要がある。詳細はREADMEの該当節。
-
-再学習が終わったので、**2026-09-26 のモデルに対して検証をやり直してから**適用する。
-キャリブレーションには `training_run/dataset/data.yaml`（学習データ）が使える。
+検出が約2倍速くなり、凍結検証セットの成績は FP32版と完全に同じ。
+枠がまれに内側に出るので `paste_rect()` の余白を **帯 0.006→0.010・その他 0.004→0.006** に広げた
+（帯だけでなくロゴも縮むため。README「検出を速くする」に実測あり）。
+**再学習のたびに INT8版も作り直すこと**（採用手順に入れてある。忘れると古いモデルが本番に残る）。
 
 ### 2. 差し替えの効果を本番で測る（数週間後）
 
@@ -269,8 +268,11 @@ powershell -ExecutionPolicy Bypass -File .\redeploy_hf.ps1
 
 ```powershell
 git show v1-prod-26.08.31           # 内容を確認
+git rm -r best_int8_openvino_model   # INT8版をやめて FP32版に戻す（余白は広いままで害は無い）
 git checkout 2c21e7e -- best.pt best_openvino_model eval/baseline_best_pt.json   # 2026-08-31 のモデルに戻す
 git checkout cd351bd~1 -- best.pt best_openvino_model   # さらに前（08-31の再学習前）に戻す
 ```
 
 モデルを戻すときは、基準スコア（`eval/baseline_best_pt.json`）も一緒に戻すこと。
+**`best_int8_openvino_model/` は最優先で読まれる**ので、前のモデルに戻すなら一緒に消すか作り直すこと
+（残したままだと、戻したつもりでも新しいモデルのINT8版が使われ続ける）。
