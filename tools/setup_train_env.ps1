@@ -71,7 +71,8 @@ if torch.cuda.is_available():
 else:
     sys.exit(1)
 '@
-    & $py -c $check
+    # -c で渡すと PS5.1 が中の " を壊して SyntaxError になるので、標準入力から渡す
+    $check | & $py -
     if ($LASTEXITCODE -ne 0) {
         throw "CUDAが使えません。-Cuda cu124 で試すか、GPUドライバを更新してください"
     }
