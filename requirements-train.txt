@@ -20,3 +20,9 @@ ultralytics
 huggingface_hub>=0.30.0
 pillow
 numpy
+
+# 採用したモデルの差し替え（OpenVINO形式への変換）と、
+# デプロイ前の tools/selfcheck_*.py（app.py を読み込む）に必要
+openvino>=2024.0.0
+flask
+pymupdf
