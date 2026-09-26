@@ -44,3 +44,5 @@ datasets/hub/
 training_run/
 # ultralytics が project を相対パスで受けたときの既定の出力先
 runs/
+# ultralytics が学習前のAMPチェック用に落とす公式モデル（学習には使わない）
+weights/
