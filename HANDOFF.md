@@ -109,18 +109,20 @@ python tools\train_new_model.py kq1kq1/obiduke-training-data --epochs 150
 
 ### Git管理外だが必要なもの
 
-| もの | 要否 | 入手方法 |
-|---|---|---|
-| `datasets/frozen_val/` | **採点に必要** | `tools/restore_frozen_val.py` で復元 |
-| `datasets/roboflow/v4/` | 再学習には**不要** | 必要ならRoboflowから再エクスポート |
-| `datasets/hub/` | 自動で作られる | fetch / train が落とす |
-| `venv/` | 必要 | `tools/setup_train_env.ps1` が作る |
-| HFトークン | 必要 | `hf auth login` |
-| `~/.ssh/id_ed25519` | **デプロイにのみ**必要 | HFに公開鍵を登録 |
-| `outputs/` `uploads/` | 不要 | アプリ実行時の一時ファイル |
+| もの | ノートPCでのサイズ | 要否 | 入手方法 |
+|---|---|---|---|
+| `datasets/frozen_val/` | 22MB | **採点に必要** | `tools/restore_frozen_val.py` で復元 |
+| `datasets/roboflow/v4/` | 271MB | 再学習には**不要** | 中身はHubの `base/train/` にある |
+| `datasets/hub/` | 239MB | 自動で作られる | fetch / train が落とす |
+| `venv/` | 1.6GB | 必要 | `tools/setup_train_env.ps1` が作る |
+| `collected/` | 124MB | 不要 | fetch の出力。使い捨て |
+| HFトークン | — | 必要 | `hf auth login` |
+| `~/.ssh/id_ed25519` | — | **デプロイにのみ**必要 | HFに公開鍵を登録 |
+| `outputs/` `uploads/` | 約100MB | 不要 | アプリ実行時の一時ファイル |
 
-**再学習・採点だけなら `git clone` ＋ `hf auth login` で足りる。**
-Roboflowのエクスポート（118MB）を持ち回る必要は無い。
+**コピーするものはゼロ。`git clone` ＋ `hf auth login` で足りる。**
+ノートPCには合計2.3GBほどあるが、必要なのは22MBの凍結検証セットだけで、
+それもHubから復元できる。Roboflowのエクスポート（271MB）も持ち回らなくてよい。
 
 ### 手順
 
