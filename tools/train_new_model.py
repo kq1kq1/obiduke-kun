@@ -361,8 +361,11 @@ def main():
     print(f"  1. {weights} をプロジェクト直下の best.pt に上書き")
     print('  2. python -c "from ultralytics import YOLO; '
           "YOLO('best.pt').export(format='openvino', imgsz=640)\"")
-    print("  3. python tools/eval_model.py best.pt   ← 上書き後にもう一度確認")
-    print(f"  4. python tools/eval_model.py best.pt --save {BASELINE}   ← 基準を更新")
+    # 基準スコアは fullwidth 規約で測ってある。--labels を省くと orig 規約で測って
+    # 別の物差しで基準を上書きしてしまう（labels と labels_fullwidth は中身が違う）
+    print("  3. python tools/eval_model.py best.pt --labels fullwidth   ← 上書き後にもう一度確認")
+    print(f"  4. python tools/eval_model.py best.pt --labels fullwidth --save {BASELINE}"
+          "   ← 基準を更新")
     print("  5. git commit して .\\redeploy_hf.ps1")
     if decision == "判断が必要":
         print("\n※ 明確に良くなってはいない。検証セットは29枚と小さいので、"

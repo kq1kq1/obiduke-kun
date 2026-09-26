@@ -14,7 +14,8 @@
 使い方:
     python tools/eval_model.py best.pt
     python tools/eval_model.py best.pt --labels fullwidth   # 案B（band全幅）の規約で採点
-    python tools/eval_model.py best.pt --save eval/baseline_best_pt.json
+    python tools/eval_model.py best.pt --labels fullwidth --save eval/baseline_best_pt.json
+        # 基準スコアは fullwidth 規約。--labels を省くと別の物差しで上書きしてしまう
     python tools/eval_model.py best.pt --sweep              # 確信度しきい値を振る
 """
 import argparse
