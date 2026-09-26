@@ -38,3 +38,9 @@ datasets/
 
 # Hubから落としたデータのキャッシュ（datasets/ で既に除外済みだが明示）
 datasets/hub/
+
+# tools/train_new_model.py の作業フォルダ。非公開の学習データ一式（hub/）と重みが入る。
+# redeploy_hf.ps1 は git add -A で送るので、除外しないと公開Spaceに上がってしまう
+training_run/
+# ultralytics が project を相対パスで受けたときの既定の出力先
+runs/
