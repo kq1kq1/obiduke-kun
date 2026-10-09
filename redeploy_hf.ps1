@@ -72,6 +72,31 @@ if ($sshOut -notmatch "Hi kq1kq1") {
     exit 1
 }
 
+# GitHubより遅れていないか確認する。
+# デプロイはローカルの内容をHFへforce pushするので、別PCの作業を取り込まないまま
+# 実行すると、新しい方（再学習したモデルなど）を本番から巻き戻してしまう。
+Write-Host "GitHubとの差を確認中..." -ForegroundColor Cyan
+git fetch origin $startBranch 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "GitHubから取得できませんでした（git 終了コード $LASTEXITCODE）。" -ForegroundColor Red
+    Write-Host "  ネットワークかSSH鍵の設定を確認してください。" -ForegroundColor Red
+    exit 1
+}
+$behind = git rev-list --count "HEAD..FETCH_HEAD"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "GitHubとの差を数えられませんでした（git 終了コード $LASTEXITCODE）。" -ForegroundColor Red
+    exit 1
+}
+if ([int]$behind -gt 0) {
+    Write-Host "ローカルの $startBranch が GitHub より $behind コミット遅れています。" -ForegroundColor Red
+    Write-Host "  このままデプロイすると、別PCでの作業を本番から巻き戻します。" -ForegroundColor Red
+    Write-Host "  先にこれを実行してください: git pull --rebase origin $startBranch" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  取り込んでいないコミット:" -ForegroundColor Yellow
+    git log --oneline "HEAD..FETCH_HEAD"
+    exit 1
+}
+
 $ok = $false
 try {
     Write-Host "`n[1/3] GitHub(origin) に push..." -ForegroundColor Cyan
